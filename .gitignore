@@ -1,0 +1,55 @@
+# ─── Secrets ──────────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.pem
+
+# ─── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# ─── Node / Next.js (under web/) ──────────────────────────────────────────────
+node_modules/
+.next/
+out/
+.turbo/
+.swc/
+next-env.d.ts.bak
+*.tsbuildinfo
+
+# ─── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ─── OS junk ──────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Editor / IDE ─────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+
+# ─── Project-local junk that shouldn't ship ──────────────────────────────────
+*.sqlite3
+*.db
+backup/
+dumps/
