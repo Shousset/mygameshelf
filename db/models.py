@@ -1,18 +1,86 @@
+"""
+Data access for MyGameShelf — MULTI-TENANT.
+
+Every function takes `user_id` (the Supabase auth UUID) and scopes its query to
+that user. SELECT/UPDATE/DELETE always include `AND user_id = %s`, and INSERTs
+always write the user_id. This is what guarantees one user can never read or
+mutate another user's rows, even when addressing a row by its primary key.
+"""
+
 from db.connection import get_connection
+
+
+# ─── USER PROFILES ────────────────────────────────────────────────────────────
+
+def ensure_user_profile(user_id):
+    """Create the profile row on first sight (idempotent)."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO user_profiles (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING;",
+                (user_id,),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_user_steam_id(user_id):
+    """Return the user's saved SteamID, or None."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT steam_id FROM user_profiles WHERE user_id = %s;", (user_id,))
+            row = cur.fetchone()
+            return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def set_user_steam_id(user_id, steam_id):
+    """Upsert the user's SteamID."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO user_profiles (user_id, steam_id) VALUES (%s, %s)
+                ON CONFLICT (user_id) DO UPDATE SET steam_id = EXCLUDED.steam_id;
+                """,
+                (user_id, steam_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_users_with_steam():
+    """Return [(user_id, steam_id), ...] for every user that has a SteamID set.
+    Used by the background scheduler to sync each user in turn."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT user_id, steam_id FROM user_profiles WHERE steam_id IS NOT NULL AND steam_id <> '';"
+            )
+            return cur.fetchall()
+    finally:
+        conn.close()
 
 
 # ─── GAMES ────────────────────────────────────────────────────────────────────
 
-def add_game(title, platform, genre, year, status="Backlog", notes="", external_id=None):
+def add_game(user_id, title, platform, genre, year, status="Backlog", notes="", external_id=None):
     sql = """
-        INSERT INTO games (title, platform, genre, year, status, notes, external_id)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO games (user_id, title, platform, genre, year, status, notes, external_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id;
     """
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(sql, (title, platform, genre, year, status, notes, external_id))
+            cur.execute(sql, (user_id, title, platform, genre, year, status, notes, external_id))
             game_id = cur.fetchone()[0]
         conn.commit()
         return game_id
@@ -20,63 +88,63 @@ def add_game(title, platform, genre, year, status="Backlog", notes="", external_
         conn.close()
 
 
-def list_games(status_filter=None):
-    sql = "SELECT id, title, platform, genre, year, status, rating, hours_played, external_id FROM games"
-    params = ()
+def list_games(user_id, status_filter=None):
+    sql = "SELECT id, title, platform, genre, year, status, rating, hours_played, external_id FROM games WHERE user_id = %s"
+    params = [user_id]
     if status_filter:
-        sql += " WHERE status = %s"
-        params = (status_filter,)
+        sql += " AND status = %s"
+        params.append(status_filter)
     sql += " ORDER BY added_at DESC;"
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(sql, params)
+            cur.execute(sql, tuple(params))
             return cur.fetchall()
     finally:
         conn.close()
 
 
-def get_game(game_id):
+def get_game(user_id, game_id):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM games WHERE id = %s;", (game_id,))
+            cur.execute("SELECT * FROM games WHERE id = %s AND user_id = %s;", (game_id, user_id))
             return cur.fetchone()
     finally:
         conn.close()
 
 
-def update_game_status(game_id, new_status):
+def update_game_status(user_id, game_id, new_status):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE games SET status = %s WHERE id = %s;",
-                (new_status, game_id),
+                "UPDATE games SET status = %s WHERE id = %s AND user_id = %s;",
+                (new_status, game_id, user_id),
             )
         conn.commit()
     finally:
         conn.close()
 
 
-def rate_game(game_id, rating, notes):
+def rate_game(user_id, game_id, rating, notes):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE games SET rating = %s, notes = %s WHERE id = %s;",
-                (rating, notes, game_id),
+                "UPDATE games SET rating = %s, notes = %s WHERE id = %s AND user_id = %s;",
+                (rating, notes, game_id, user_id),
             )
         conn.commit()
     finally:
         conn.close()
 
 
-def delete_game(game_id):
+def delete_game(user_id, game_id):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM games WHERE id = %s;", (game_id,))
+            cur.execute("DELETE FROM games WHERE id = %s AND user_id = %s;", (game_id, user_id))
         conn.commit()
     finally:
         conn.close()
@@ -84,30 +152,35 @@ def delete_game(game_id):
 
 # ─── SESSIONS ─────────────────────────────────────────────────────────────────
 
-def log_session(game_id, hours, notes=""):
+def log_session(user_id, game_id, hours, notes=""):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            # Scope the games UPDATE by user_id so we only ever bump the caller's game.
             cur.execute(
-                "INSERT INTO sessions (game_id, hours, notes) VALUES (%s, %s, %s);",
-                (game_id, hours, notes),
+                "UPDATE games SET hours_played = hours_played + %s WHERE id = %s AND user_id = %s;",
+                (hours, game_id, user_id),
             )
+            if cur.rowcount == 0:
+                # Game doesn't belong to this user (or doesn't exist) — don't orphan a session.
+                conn.rollback()
+                raise PermissionError("Game not found for this user.")
             cur.execute(
-                "UPDATE games SET hours_played = hours_played + %s WHERE id = %s;",
-                (hours, game_id),
+                "INSERT INTO sessions (user_id, game_id, hours, notes) VALUES (%s, %s, %s, %s);",
+                (user_id, game_id, hours, notes),
             )
         conn.commit()
     finally:
         conn.close()
 
 
-def get_sessions(game_id):
+def get_sessions(user_id, game_id):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT date, hours, notes FROM sessions WHERE game_id = %s ORDER BY date DESC;",
-                (game_id,),
+                "SELECT date, hours, notes FROM sessions WHERE game_id = %s AND user_id = %s ORDER BY date DESC;",
+                (game_id, user_id),
             )
             return cur.fetchall()
     finally:
@@ -116,36 +189,37 @@ def get_sessions(game_id):
 
 # ─── WISHLIST ─────────────────────────────────────────────────────────────────
 
-def add_to_wishlist(title, platform, priority="Medium", notes=""):
+def add_to_wishlist(user_id, title, platform, priority="Medium", notes=""):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO wishlist (title, platform, priority, notes) VALUES (%s, %s, %s, %s);",
-                (title, platform, priority, notes),
+                "INSERT INTO wishlist (user_id, title, platform, priority, notes) VALUES (%s, %s, %s, %s, %s);",
+                (user_id, title, platform, priority, notes),
             )
         conn.commit()
     finally:
         conn.close()
 
 
-def list_wishlist():
+def list_wishlist(user_id):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, title, platform, priority, notes FROM wishlist ORDER BY priority DESC, added_at DESC;"
+                "SELECT id, title, platform, priority, notes FROM wishlist WHERE user_id = %s ORDER BY priority DESC, added_at DESC;",
+                (user_id,),
             )
             return cur.fetchall()
     finally:
         conn.close()
 
 
-def remove_from_wishlist(wish_id):
+def remove_from_wishlist(user_id, wish_id):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM wishlist WHERE id = %s;", (wish_id,))
+            cur.execute("DELETE FROM wishlist WHERE id = %s AND user_id = %s;", (wish_id, user_id))
         conn.commit()
     finally:
         conn.close()
@@ -153,7 +227,7 @@ def remove_from_wishlist(wish_id):
 
 # ─── ACHIEVEMENTS ─────────────────────────────────────────────────────────────
 
-def add_achievement(game_id, title, description="", is_unlocked=False,
+def add_achievement(user_id, game_id, title, description="", is_unlocked=False,
                     icon_url=None, icon_gray_url=None, is_hidden=False,
                     unlocked_at=None, global_pct=None):
     """If unlocked_at is provided (datetime), it overrides the default NOW()-when-unlocked behavior.
@@ -167,12 +241,12 @@ def add_achievement(game_id, title, description="", is_unlocked=False,
             cur.execute(
                 """
                 INSERT INTO achievements
-                    (game_id, title, description, is_unlocked, unlocked_at,
+                    (user_id, game_id, title, description, is_unlocked, unlocked_at,
                      icon_url, icon_gray_url, is_hidden, global_pct)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id;
                 """,
-                (game_id, title, description, is_unlocked, unlocked_at,
+                (user_id, game_id, title, description, is_unlocked, unlocked_at,
                  icon_url, icon_gray_url, is_hidden, global_pct),
             )
             ach_id = cur.fetchone()[0]
@@ -181,7 +255,8 @@ def add_achievement(game_id, title, description="", is_unlocked=False,
     finally:
         conn.close()
 
-def list_achievements(game_id):
+
+def list_achievements(user_id, game_id):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -191,44 +266,47 @@ def list_achievements(game_id):
                 SELECT id, game_id, title, description, is_unlocked, unlocked_at,
                        icon_url, icon_gray_url, is_hidden, global_pct
                 FROM achievements
-                WHERE game_id = %s
+                WHERE game_id = %s AND user_id = %s
                 ORDER BY is_unlocked DESC,
                          unlocked_at DESC NULLS LAST,
                          global_pct ASC NULLS LAST,
                          id ASC;
                 """,
-                (game_id,),
+                (game_id, user_id),
             )
             return cur.fetchall()
     finally:
         conn.close()
 
-def toggle_achievement(ach_id, is_unlocked):
+
+def toggle_achievement(user_id, ach_id, is_unlocked):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             time_sql = "NOW()" if is_unlocked else "NULL"
             cur.execute(
-                f"UPDATE achievements SET is_unlocked = %s, unlocked_at = {time_sql} WHERE id = %s;",
-                (is_unlocked, ach_id),
+                f"UPDATE achievements SET is_unlocked = %s, unlocked_at = {time_sql} WHERE id = %s AND user_id = %s;",
+                (is_unlocked, ach_id, user_id),
             )
         conn.commit()
     finally:
         conn.close()
 
-def clear_game_achievements(game_id):
+
+def clear_game_achievements(user_id, game_id):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM achievements WHERE game_id = %s;", (game_id,))
+            cur.execute("DELETE FROM achievements WHERE game_id = %s AND user_id = %s;", (game_id, user_id))
         conn.commit()
     finally:
         conn.close()
 
+
 # ─── SYNC HELPERS ─────────────────────────────────────────────────────────────
 
-def list_steam_games_with_appid():
-    """Return [(id, title, external_id, hours_played, genre, year), ...] for Steam games with an AppID set."""
+def list_steam_games_with_appid(user_id):
+    """Return [(id, title, external_id, hours_played, genre, year), ...] for this user's Steam games with an AppID set."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -236,58 +314,62 @@ def list_steam_games_with_appid():
                 """
                 SELECT id, title, external_id, hours_played, genre, year
                 FROM games
-                WHERE platform = 'Steam' AND external_id IS NOT NULL AND external_id <> '';
-                """
+                WHERE user_id = %s AND platform = 'Steam'
+                  AND external_id IS NOT NULL AND external_id <> '';
+                """,
+                (user_id,),
             )
             return cur.fetchall()
     finally:
         conn.close()
 
 
-def list_steam_games_missing_appid():
-    """Return [(id, title), ...] for Steam games whose external_id is NULL/empty — to be backfilled by title match."""
+def list_steam_games_missing_appid(user_id):
+    """Return [(id, title), ...] for this user's Steam games whose external_id is NULL/empty."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT id, title FROM games
-                WHERE platform = 'Steam' AND (external_id IS NULL OR external_id = '');
-                """
+                WHERE user_id = %s AND platform = 'Steam'
+                  AND (external_id IS NULL OR external_id = '');
+                """,
+                (user_id,),
             )
             return cur.fetchall()
     finally:
         conn.close()
 
 
-def set_game_external_id(game_id, external_id):
+def set_game_external_id(user_id, game_id, external_id):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE games SET external_id = %s WHERE id = %s;",
-                (external_id, game_id),
+                "UPDATE games SET external_id = %s WHERE id = %s AND user_id = %s;",
+                (external_id, game_id, user_id),
             )
         conn.commit()
     finally:
         conn.close()
 
 
-def set_game_last_played(game_id, dt):
+def set_game_last_played(user_id, game_id, dt):
     """dt may be a datetime or None."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE games SET last_played_at = %s WHERE id = %s;",
-                (dt, game_id),
+                "UPDATE games SET last_played_at = %s WHERE id = %s AND user_id = %s;",
+                (dt, game_id, user_id),
             )
         conn.commit()
     finally:
         conn.close()
 
 
-def get_game_local_stats(game_id):
+def get_game_local_stats(user_id, game_id):
     """Returns (hours_played, last_played_at, last_session_date, hours_2weeks, external_id, title, platform)."""
     conn = get_connection()
     try:
@@ -306,19 +388,19 @@ def get_game_local_stats(game_id):
                     g.title,
                     g.platform
                 FROM games g
-                WHERE g.id = %s;
+                WHERE g.id = %s AND g.user_id = %s;
                 """,
-                (game_id,),
+                (game_id, user_id),
             )
             return cur.fetchone()
     finally:
         conn.close()
 
 
-def set_game_metadata(game_id, genre=None, year=None):
+def set_game_metadata(user_id, game_id, genre=None, year=None):
     """Patch genre and/or year only if a value is provided. Empty strings count as 'do not touch'."""
     sets = []
-    params: list = []
+    params = []
     if genre:
         sets.append("genre = %s")
         params.append(genre)
@@ -328,7 +410,9 @@ def set_game_metadata(game_id, genre=None, year=None):
     if not sets:
         return
     params.append(game_id)
-    sql = f"UPDATE games SET {', '.join(sets)} WHERE id = %s;"
+    params.append(user_id)
+    # Note: the SET fragments are hardcoded literals above (never user input) — safe to interpolate.
+    sql = f"UPDATE games SET {', '.join(sets)} WHERE id = %s AND user_id = %s;"
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -338,39 +422,39 @@ def set_game_metadata(game_id, genre=None, year=None):
         conn.close()
 
 
-def set_game_sync_meta(game_id, status):
+def set_game_sync_meta(user_id, game_id, status):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE games SET last_synced_at = NOW(), last_sync_status = %s WHERE id = %s;",
-                (status, game_id),
+                "UPDATE games SET last_synced_at = NOW(), last_sync_status = %s WHERE id = %s AND user_id = %s;",
+                (status, game_id, user_id),
             )
         conn.commit()
     finally:
         conn.close()
 
 
-def set_game_hours(game_id, hours):
+def set_game_hours(user_id, game_id, hours):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE games SET hours_played = %s WHERE id = %s;",
-                (hours, game_id),
+                "UPDATE games SET hours_played = %s WHERE id = %s AND user_id = %s;",
+                (hours, game_id, user_id),
             )
         conn.commit()
     finally:
         conn.close()
 
 
-def start_sync_run(trigger):
+def start_sync_run(user_id, trigger):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO sync_runs (trigger) VALUES (%s) RETURNING id;",
-                (trigger,),
+                "INSERT INTO sync_runs (user_id, trigger) VALUES (%s, %s) RETURNING id;",
+                (user_id, trigger),
             )
             run_id = cur.fetchone()[0]
         conn.commit()
@@ -379,20 +463,20 @@ def start_sync_run(trigger):
         conn.close()
 
 
-def finish_sync_run(run_id, games_synced, errors):
+def finish_sync_run(user_id, run_id, games_synced, errors):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE sync_runs SET finished_at = NOW(), games_synced = %s, errors = %s WHERE id = %s;",
-                (games_synced, errors, run_id),
+                "UPDATE sync_runs SET finished_at = NOW(), games_synced = %s, errors = %s WHERE id = %s AND user_id = %s;",
+                (games_synced, errors, run_id, user_id),
             )
         conn.commit()
     finally:
         conn.close()
 
 
-def get_last_sync_run():
+def get_last_sync_run(user_id):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -400,49 +484,53 @@ def get_last_sync_run():
                 """
                 SELECT id, started_at, finished_at, games_synced, errors, trigger
                 FROM sync_runs
+                WHERE user_id = %s
                 ORDER BY started_at DESC
                 LIMIT 1;
-                """
+                """,
+                (user_id,),
             )
             return cur.fetchone()
     finally:
         conn.close()
 
+
 # ─── STATS ────────────────────────────────────────────────────────────────────
 
-def get_stats():
+def get_stats(user_id):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM games;")
+            cur.execute("SELECT COUNT(*) FROM games WHERE user_id = %s;", (user_id,))
             total_games = cur.fetchone()[0]
 
-            cur.execute("SELECT COUNT(*) FROM games WHERE status = 'Completed';")
+            cur.execute("SELECT COUNT(*) FROM games WHERE user_id = %s AND status = 'Completed';", (user_id,))
             completed = cur.fetchone()[0]
 
-            cur.execute("SELECT COALESCE(SUM(hours_played), 0) FROM games;")
+            cur.execute("SELECT COALESCE(SUM(hours_played), 0) FROM games WHERE user_id = %s;", (user_id,))
             total_hours = cur.fetchone()[0]
 
             cur.execute(
                 """
                 SELECT genre, COUNT(*) AS cnt
                 FROM games
-                WHERE genre IS NOT NULL AND genre != ''
+                WHERE user_id = %s AND genre IS NOT NULL AND genre != ''
                 GROUP BY genre
                 ORDER BY cnt DESC
                 LIMIT 1;
-                """
+                """,
+                (user_id,),
             )
             row = cur.fetchone()
             top_genre = row[0] if row else "N/A"
 
-            cur.execute("SELECT COUNT(*) FROM wishlist;")
+            cur.execute("SELECT COUNT(*) FROM wishlist WHERE user_id = %s;", (user_id,))
             wishlist_count = cur.fetchone()[0]
 
-            cur.execute("SELECT COUNT(*) FROM achievements;")
+            cur.execute("SELECT COUNT(*) FROM achievements WHERE user_id = %s;", (user_id,))
             total_achievements = cur.fetchone()[0]
 
-            cur.execute("SELECT COUNT(*) FROM achievements WHERE is_unlocked = TRUE;")
+            cur.execute("SELECT COUNT(*) FROM achievements WHERE user_id = %s AND is_unlocked = TRUE;", (user_id,))
             unlocked_achievements = cur.fetchone()[0]
 
         completion_pct = round((completed / total_games * 100), 1) if total_games else 0

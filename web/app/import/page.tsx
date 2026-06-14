@@ -12,15 +12,14 @@ export default function ImportPage() {
 
   // Steam State
   const [steamId, setSteamId] = useState("");
-  const [apiKey, setApiKey] = useState("");
 
   // Bulk Import State (Epic / PSN)
   const [bulkText, setBulkText] = useState("");
 
   const handleSteamSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!steamId || !apiKey) {
-      setError("Please fill in both Steam ID and API Key");
+    if (!steamId) {
+      setError("Please enter your Steam ID");
       return;
     }
     setError("");
@@ -28,7 +27,7 @@ export default function ImportPage() {
     setLoading(true);
 
     try {
-      const data = await steamImport(steamId, apiKey, false);
+      const data = await steamImport(steamId, false);
       setResult(data);
     } catch (err: any) {
       setError(err.message || "Failed to fetch from Steam");
@@ -103,8 +102,9 @@ export default function ImportPage() {
         {activeTab === "steam" && (
           <form onSubmit={handleSteamSubmit} style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
             <p style={{ margin: 0, color: "#8f98a0", fontSize: "0.9rem", lineHeight: 1.5 }}>
-              Enter your SteamID64 and Steam Web API Key. Your Steam profile must be set to <b>Public</b>.
-              Keys are not permanently stored; they pass instantly to Steam.
+              Enter your SteamID64. Your Steam profile must be set to <b>Public</b>.
+              We use the app&apos;s own Steam key on the server — you don&apos;t need your own API key.
+              Your SteamID is saved to your account so future syncs are automatic.
             </p>
             <input
               className="form-input"
@@ -112,13 +112,6 @@ export default function ImportPage() {
               placeholder="SteamID64 (e.g., 7656119...)"
               value={steamId}
               onChange={(e) => setSteamId(e.target.value)}
-            />
-            <input
-              className="form-input"
-              type="password"
-              placeholder="Steam Web API Key"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
             />
             <button type="submit" className="btn-primary" disabled={loading} style={{ alignSelf: "flex-start" }}>
               {loading ? "Syncing..." : "Start Steam Sync"}

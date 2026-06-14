@@ -1,3 +1,5 @@
+import { supabase } from "@/lib/supabase/client";
+
 const isBrowser = typeof window !== "undefined";
 const defaultApiUrl = isBrowser ? `http://${window.location.hostname}:8000` : "http://localhost:8000";
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || defaultApiUrl;
@@ -61,15 +63,30 @@ export class OfflineError extends Error {
 }
 
 async function apiFetch(path: string, options?: RequestInit) {
+  // Attach the Supabase access token so the backend can identify the user.
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const token = session?.access_token;
+
   let res: Response;
   try {
     res = await fetch(`${API_BASE}${path}`, {
-      headers: { "Content-Type": "application/json" },
       ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(options?.headers || {}),
+      },
     });
   } catch (e) {
     // Network failure (DNS, refused, offline) — distinguishable from API errors below.
     throw new OfflineError();
+  }
+  if (res.status === 401 && isBrowser) {
+    // Session expired or missing — bounce to login.
+    window.location.href = "/login";
+    throw new Error("Not authenticated");
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
@@ -129,10 +146,10 @@ export const syncSteamAchievements = (gameId: number) =>
   apiFetch(`/api/games/${gameId}/sync_steam`, { method: "POST" });
 
 // Imports
-export const steamImport = (steamId: string, apiKey: string, dryRun = false) =>
+export const steamImport = (steamId: string, dryRun = false) =>
   apiFetch("/api/import/steam", {
     method: "POST",
-    body: JSON.stringify({ steam_id: steamId, api_key: apiKey, dry_run: dryRun }),
+    body: JSON.stringify({ steam_id: steamId, dry_run: dryRun }),
   });
 
 export const epicImport = (titles: string[]) =>

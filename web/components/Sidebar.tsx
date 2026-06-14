@@ -12,8 +12,12 @@ import {
   Download,
   Settings,
   User,
+  LogOut,
 } from "lucide-react";
 import { getSteamProfile, getStats, type SteamProfile, type Stats } from "@/lib/api";
+import { supabase } from "@/lib/supabase/client";
+
+const HIDDEN_ON = ["/login", "/signup"];
 
 const navItems = [
   { href: "/", icon: LayoutDashboard, label: "Dashboard" },
@@ -30,10 +34,20 @@ export default function Sidebar() {
   const [profile, setProfile] = useState<SteamProfile | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
 
+  const hidden = HIDDEN_ON.some((p) => pathname === p || pathname.startsWith(p + "/"));
+
   useEffect(() => {
+    if (hidden) return;
     getSteamProfile().then(setProfile).catch(() => setProfile(null));
     getStats().then(setStats).catch(() => setStats(null));
-  }, []);
+  }, [hidden]);
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    window.location.href = "/login";
+  };
+
+  if (hidden) return null;
 
   return (
     <aside
@@ -167,14 +181,42 @@ export default function Sidebar() {
       {/* Footer */}
       <div
         style={{
-          padding: "1rem 1.25rem 0",
+          padding: "1rem 0.75rem 0",
           borderTop: "1px solid rgba(102, 192, 244, 0.15)",
           marginTop: "auto",
-          fontSize: "0.7rem",
-          color: "#56707f",
         }}
       >
-        v1.0 · Next.js + FastAPI
+        <button
+          onClick={handleSignOut}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.6rem",
+            width: "100%",
+            padding: "0.55rem 0.85rem",
+            borderRadius: "10px",
+            border: "1px solid transparent",
+            background: "transparent",
+            color: "#8f98a0",
+            fontSize: "0.85rem",
+            cursor: "pointer",
+            transition: "all 0.2s",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = "rgba(239, 68, 68, 0.12)";
+            e.currentTarget.style.color = "#fca5a5";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "transparent";
+            e.currentTarget.style.color = "#8f98a0";
+          }}
+        >
+          <LogOut size={16} />
+          Sign out
+        </button>
+        <div style={{ padding: "0.75rem 0.5rem 0", fontSize: "0.7rem", color: "#56707f" }}>
+          v2.0 · Next.js + FastAPI
+        </div>
       </div>
     </aside>
   );

@@ -1,7 +1,10 @@
 """
-MyGameShelf — FastAPI REST Backend
+MyGameShelf — FastAPI REST Backend (multi-tenant)
 Run with: uvicorn api.main:app --reload --port 8000
 (from the mygameshelf/ directory)
+
+Every data endpoint requires a Supabase JWT (Authorization: Bearer <token>) and
+is scoped to the authenticated user via the `user_id` dependency.
 """
 
 from __future__ import annotations
@@ -13,7 +16,7 @@ from typing import Optional
 import httpx
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -30,32 +33,51 @@ from db.models import (
     list_steam_games_with_appid, list_steam_games_missing_appid, set_game_external_id,
     set_game_sync_meta, set_game_metadata, set_game_last_played, get_game_local_stats,
     start_sync_run, finish_sync_run, get_last_sync_run,
+    add_achievement, list_achievements, toggle_achievement, clear_game_achievements,
+    ensure_user_profile, get_user_steam_id, set_user_steam_id, list_users_with_steam,
 )
+from api.auth import get_current_user
 
-app = FastAPI(title="MyGameShelf API", version="1.0.0")
+app = FastAPI(title="MyGameShelf API", version="2.0.0")
 
-# Allow calls from any Next.js port or local IP
+# CORS — restrict to the deployed frontend(s). Configure via ALLOWED_ORIGINS (comma-separated).
+_allowed = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
+ALLOWED_ORIGINS = [o.strip() for o in _allowed.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-# ─── SCHEDULER + SYNC LOCK ───────────────────────────────────────────────────
+# ─── SCHEDULER + PER-USER SYNC LOCKS ──────────────────────────────────────────
 
 scheduler = BackgroundScheduler()
 _sync_lock = threading.Lock()
-_sync_in_progress = False
+_syncing_users: set[str] = set()
+
+
+def _try_begin_sync(user_id: str) -> bool:
+    """Reserve a sync slot for this user. Returns False if one is already running."""
+    with _sync_lock:
+        if user_id in _syncing_users:
+            return False
+        _syncing_users.add(user_id)
+        return True
+
+
+def _end_sync(user_id: str):
+    with _sync_lock:
+        _syncing_users.discard(user_id)
 
 
 @app.on_event("startup")
 def on_startup():
     try:
         initialize_schema()
-        # LIVE PATCHES for older DBs predating these columns/tables
+        # LIVE PATCHES for older DBs predating these columns/tables.
         conn = get_connection()
         try:
             with conn.cursor() as cur:
@@ -68,25 +90,19 @@ def on_startup():
                 cur.execute("ALTER TABLE achievements ADD COLUMN IF NOT EXISTS icon_gray_url VARCHAR(500);")
                 cur.execute("ALTER TABLE achievements ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN DEFAULT FALSE;")
                 cur.execute("ALTER TABLE achievements ADD COLUMN IF NOT EXISTS global_pct NUMERIC(5,2);")
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS sync_runs (
-                        id            SERIAL PRIMARY KEY,
-                        started_at    TIMESTAMP DEFAULT NOW(),
-                        finished_at   TIMESTAMP,
-                        games_synced  INT DEFAULT 0,
-                        errors        INT DEFAULT 0,
-                        trigger       VARCHAR(20)
-                    );
-                    """
-                )
+                # Multi-tenant columns (nullable here; migration 001 enforces NOT NULL after backfill).
+                cur.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS user_id UUID;")
+                cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id UUID;")
+                cur.execute("ALTER TABLE wishlist ADD COLUMN IF NOT EXISTS user_id UUID;")
+                cur.execute("ALTER TABLE achievements ADD COLUMN IF NOT EXISTS user_id UUID;")
+                cur.execute("ALTER TABLE sync_runs ADD COLUMN IF NOT EXISTS user_id UUID;")
             conn.commit()
         finally:
             conn.close()
     except Exception as e:
         print(f"[WARNING] Could not initialize schema: {e}")
 
-    # Boot the background scheduler — runs Steam sync every 6h
+    # Boot the background scheduler — runs Steam sync every 6h for every user with a SteamID.
     try:
         if not scheduler.running:
             scheduler.add_job(
@@ -110,45 +126,46 @@ def on_shutdown():
 # ─── PYDANTIC MODELS ──────────────────────────────────────────────────────────
 
 class GameCreate(BaseModel):
-    title: str
-    platform: str = ""
-    genre: str = ""
-    year: Optional[int] = None
+    title: str = Field(..., min_length=1, max_length=255)
+    platform: str = Field("", max_length=100)
+    genre: str = Field("", max_length=100)
+    year: Optional[int] = Field(None, ge=1950, le=2100)
     status: str = "Backlog"
-    notes: str = ""
+    notes: str = Field("", max_length=5000)
 
 class StatusUpdate(BaseModel):
     status: str
 
 class RatingUpdate(BaseModel):
     rating: float = Field(..., ge=0, le=10)
-    notes: str = ""
+    notes: str = Field("", max_length=5000)
 
 class SessionCreate(BaseModel):
-    hours: float = Field(..., gt=0)
-    notes: str = ""
+    hours: float = Field(..., gt=0, le=10000)
+    notes: str = Field("", max_length=5000)
 
 class WishlistCreate(BaseModel):
-    title: str
-    platform: str = ""
+    title: str = Field(..., min_length=1, max_length=255)
+    platform: str = Field("", max_length=100)
     priority: str = "Medium"
-    notes: str = ""
+    notes: str = Field("", max_length=5000)
 
 class AchievementCreate(BaseModel):
-    title: str
-    description: str = ""
+    title: str = Field(..., min_length=1, max_length=255)
+    description: str = Field("", max_length=2000)
 
 class AchievementToggle(BaseModel):
     is_unlocked: bool
 
 class SteamImportRequest(BaseModel):
-    steam_id: str
-    api_key: str
+    # api_key is NO LONGER accepted from the client — the server holds one key.
+    steam_id: str = Field(..., min_length=1, max_length=32)
     dry_run: bool = False
 
 class BulkImport(BaseModel):
     titles: list[str]
-    platform: str
+    platform: str = Field(..., max_length=100)
+
 
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
 
@@ -156,97 +173,121 @@ def _row_to_game(row) -> dict:
     keys = ["id", "title", "platform", "genre", "year", "status", "rating", "hours_played", "external_id"]
     if row is None:
         return {}
-    # list_games returns 9 cols; get_game returns all cols
+    # list_games returns 9 cols; get_game returns all cols. Note: get_game's first
+    # column is id, so slicing [:9] would include user_id — instead map explicitly.
     return dict(zip(keys, row[:9]))
+
+
+def _get_steam_api_key() -> Optional[str]:
+    return os.getenv("STEAM_API_KEY")
 
 
 # ─── GAMES ────────────────────────────────────────────────────────────────────
 
 @app.get("/api/games")
-def api_list_games(status: Optional[str] = None):
-    rows = list_games(status)
+def api_list_games(status: Optional[str] = None, user_id: str = Depends(get_current_user)):
+    rows = list_games(user_id, status)
     return [_row_to_game(r) for r in rows]
 
 
 @app.post("/api/games", status_code=201)
-def api_add_game(body: GameCreate):
-    gid = add_game(body.title, body.platform, body.genre, body.year, body.status, body.notes)
+def api_add_game(body: GameCreate, user_id: str = Depends(get_current_user)):
+    gid = add_game(user_id, body.title, body.platform, body.genre, body.year, body.status, body.notes)
     return {"id": gid}
 
 
 @app.get("/api/games/{game_id}")
-def api_get_game(game_id: int):
-    row = get_game(game_id)
+def api_get_game(game_id: int, user_id: str = Depends(get_current_user)):
+    row = get_game(user_id, game_id)
     if not row:
         raise HTTPException(status_code=404, detail="Game not found")
-    return _row_to_game(row)
+    # get_game returns SELECT *; column order:
+    # 0 id, 1 user_id, 2 title, 3 platform, 4 genre, 5 year, 6 status,
+    # 7 rating, 8 hours_played, 9 notes, 10 external_id, ...
+    return {
+        "id": row[0],
+        "title": row[2],
+        "platform": row[3],
+        "genre": row[4],
+        "year": row[5],
+        "status": row[6],
+        "rating": row[7],
+        "hours_played": row[8],
+        "external_id": row[10],
+    }
 
 
 @app.put("/api/games/{game_id}/status")
-def api_update_status(game_id: int, body: StatusUpdate):
+def api_update_status(game_id: int, body: StatusUpdate, user_id: str = Depends(get_current_user)):
     valid = ["Backlog", "Playing", "Completed", "Abandoned"]
     if body.status not in valid:
         raise HTTPException(status_code=400, detail=f"Status must be one of {valid}")
-    update_game_status(game_id, body.status)
+    if not get_game(user_id, game_id):
+        raise HTTPException(status_code=404, detail="Game not found")
+    update_game_status(user_id, game_id, body.status)
     return {"ok": True}
 
 
 @app.put("/api/games/{game_id}/rating")
-def api_rate_game(game_id: int, body: RatingUpdate):
-    rate_game(game_id, body.rating, body.notes)
+def api_rate_game(game_id: int, body: RatingUpdate, user_id: str = Depends(get_current_user)):
+    if not get_game(user_id, game_id):
+        raise HTTPException(status_code=404, detail="Game not found")
+    rate_game(user_id, game_id, body.rating, body.notes)
     return {"ok": True}
 
 
 @app.delete("/api/games/{game_id}")
-def api_delete_game(game_id: int):
-    delete_game(game_id)
+def api_delete_game(game_id: int, user_id: str = Depends(get_current_user)):
+    if not get_game(user_id, game_id):
+        raise HTTPException(status_code=404, detail="Game not found")
+    delete_game(user_id, game_id)
     return {"ok": True}
 
 
 # ─── SESSIONS ─────────────────────────────────────────────────────────────────
 
 @app.get("/api/games/{game_id}/sessions")
-def api_get_sessions(game_id: int):
-    rows = get_sessions(game_id)
+def api_get_sessions(game_id: int, user_id: str = Depends(get_current_user)):
+    rows = get_sessions(user_id, game_id)
     return [{"date": str(r[0]), "hours": float(r[1]), "notes": r[2]} for r in rows]
 
 
 @app.post("/api/games/{game_id}/sessions", status_code=201)
-def api_log_session(game_id: int, body: SessionCreate):
-    if not get_game(game_id):
+def api_log_session(game_id: int, body: SessionCreate, user_id: str = Depends(get_current_user)):
+    if not get_game(user_id, game_id):
         raise HTTPException(status_code=404, detail="Game not found")
-    log_session(game_id, body.hours, body.notes)
+    log_session(user_id, game_id, body.hours, body.notes)
     return {"ok": True}
 
 
 # ─── WISHLIST ─────────────────────────────────────────────────────────────────
 
 @app.get("/api/wishlist")
-def api_list_wishlist():
-    rows = list_wishlist()
+def api_list_wishlist(user_id: str = Depends(get_current_user)):
+    rows = list_wishlist(user_id)
     keys = ["id", "title", "platform", "priority", "notes"]
     return [dict(zip(keys, r)) for r in rows]
 
 
 @app.post("/api/wishlist", status_code=201)
-def api_add_wishlist(body: WishlistCreate):
-    add_to_wishlist(body.title, body.platform, body.priority, body.notes)
+def api_add_wishlist(body: WishlistCreate, user_id: str = Depends(get_current_user)):
+    if body.priority not in ("Low", "Medium", "High"):
+        raise HTTPException(status_code=400, detail="Priority must be Low, Medium or High")
+    add_to_wishlist(user_id, body.title, body.platform, body.priority, body.notes)
     return {"ok": True}
 
 
 @app.delete("/api/wishlist/{wish_id}")
-def api_remove_wishlist(wish_id: int):
-    remove_from_wishlist(wish_id)
+def api_remove_wishlist(wish_id: int, user_id: str = Depends(get_current_user)):
+    remove_from_wishlist(user_id, wish_id)
     return {"ok": True}
 
 
 # ─── ACHIEVEMENTS ─────────────────────────────────────────────────────────────
 
-from db.models import add_achievement, list_achievements, toggle_achievement, clear_game_achievements
-
 @app.get("/api/games/{game_id}/achievements")
-def api_list_achievements(game_id: int):
-    rows = list_achievements(game_id)
+def api_list_achievements(game_id: int, user_id: str = Depends(get_current_user)):
+    rows = list_achievements(user_id, game_id)
     keys = ["id", "game_id", "title", "description", "is_unlocked", "unlocked_at",
             "icon_url", "icon_gray_url", "is_hidden", "global_pct"]
     out = []
@@ -257,36 +298,40 @@ def api_list_achievements(game_id: int):
         out.append(d)
     return out
 
+
 @app.post("/api/games/{game_id}/achievements", status_code=201)
-def api_add_achievement(game_id: int, body: AchievementCreate):
-    if not get_game(game_id):
+def api_add_achievement(game_id: int, body: AchievementCreate, user_id: str = Depends(get_current_user)):
+    if not get_game(user_id, game_id):
         raise HTTPException(status_code=404, detail="Game not found")
-    ach_id = add_achievement(game_id, body.title, body.description)
+    ach_id = add_achievement(user_id, game_id, body.title, body.description)
     return {"id": ach_id}
 
+
 @app.put("/api/achievements/{ach_id}/toggle")
-def api_toggle_achievement(ach_id: int, body: AchievementToggle):
-    toggle_achievement(ach_id, body.is_unlocked)
+def api_toggle_achievement(ach_id: int, body: AchievementToggle, user_id: str = Depends(get_current_user)):
+    toggle_achievement(user_id, ach_id, body.is_unlocked)
     return {"ok": True}
 
+
 @app.post("/api/games/{game_id}/sync_steam")
-async def api_sync_steam_achievements(game_id: int):
-    game = get_game(game_id)
+async def api_sync_steam_achievements(game_id: int, user_id: str = Depends(get_current_user)):
+    game = get_game(user_id, game_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
-        
-    external_id = game[8]
+
+    # get_game returns SELECT *; external_id is the last data column. Index by name-safety:
+    # columns: id, user_id, title, platform, genre, year, status, rating, hours_played, notes, external_id, ...
+    external_id = game[10]
     if not external_id:
         raise HTTPException(status_code=400, detail="Game has no Steam AppID attached. Maybe delete and re-import this game from Steam?")
-        
-    from dotenv import load_dotenv
-    load_dotenv()
-    
-    api_key = os.getenv("STEAM_API_KEY")
-    steam_id = os.getenv("STEAM_ID")
-    if not api_key or not steam_id:
-        raise HTTPException(status_code=400, detail="STEAM_API_KEY or STEAM_ID is missing from .env configuration.")
-        
+
+    api_key = _get_steam_api_key()
+    steam_id = get_user_steam_id(user_id)
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Server STEAM_API_KEY is not configured.")
+    if not steam_id:
+        raise HTTPException(status_code=400, detail="No SteamID saved for your account. Import from Steam first.")
+
     # Triple Steam Queries — schema (achievement defs), player progress, and global rarity %
     schema_url = f"https://api.steampowered.com/ISteamUserStats/GetSchemaForGame/v2/?key={api_key}&appid={external_id}"
     player_url = f"https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v0001/?appid={external_id}&key={api_key}&steamid={steam_id}"
@@ -310,10 +355,8 @@ async def api_sync_steam_achievements(game_id: int):
         return {"success": True, "synced": 0, "message": "This game does not support Steam Achievements!"}
 
     player_achs = p_data.get("playerstats", {}).get("achievements", [])
-    # apiname -> {achieved, unlocktime}
     player_map = {a["apiname"]: a for a in player_achs}
 
-    # Global percentages keyed by apiname
     global_pct_map = {}
     for gp in (g_data.get("achievementpercentages") or {}).get("achievements", []):
         try:
@@ -321,8 +364,7 @@ async def api_sync_steam_achievements(game_id: int):
         except (KeyError, TypeError, ValueError):
             pass
 
-    # Wipe old and fresh sync
-    clear_game_achievements(game_id)
+    clear_game_achievements(user_id, game_id)
     synced_count = 0
 
     from datetime import datetime
@@ -335,7 +377,7 @@ async def api_sync_steam_achievements(game_id: int):
         unlocktime = int(pa.get("unlocktime", 0) or 0)
         unlocked_at = datetime.fromtimestamp(unlocktime) if (unlocked and unlocktime > 0) else None
         add_achievement(
-            game_id, name, desc, unlocked,
+            user_id, game_id, name, desc, unlocked,
             icon_url=a.get("icon"),
             icon_gray_url=a.get("icongray"),
             is_hidden=bool(a.get("hidden")),
@@ -343,15 +385,15 @@ async def api_sync_steam_achievements(game_id: int):
             global_pct=global_pct_map.get(apiname),
         )
         synced_count += 1
-        
+
     return {"success": True, "synced": synced_count, "message": f"Successfully synced {synced_count} achievements from Steam!"}
 
 
 # ─── STATS ────────────────────────────────────────────────────────────────────
 
 @app.get("/api/stats")
-def api_get_stats():
-    return get_stats()
+def api_get_stats(user_id: str = Depends(get_current_user)):
+    return get_stats(user_id)
 
 
 # ─── IMPORTS ──────────────────────────────────────────────────────────────────
@@ -359,9 +401,13 @@ def api_get_stats():
 STEAM_OWNED_URL = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/"
 
 @app.post("/api/import/steam")
-async def api_import_steam(body: SteamImportRequest):
+async def api_import_steam(body: SteamImportRequest, user_id: str = Depends(get_current_user)):
+    api_key = _get_steam_api_key()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Server STEAM_API_KEY is not configured.")
+
     params = {
-        "key": body.api_key,
+        "key": api_key,
         "steamid": body.steam_id,
         "include_appinfo": "true",
         "include_played_free_games": "true",
@@ -372,7 +418,7 @@ async def api_import_steam(body: SteamImportRequest):
 
     if resp.status_code != 200:
         error_text = resp.text[:150].strip() if resp.text else "No extra details"
-        raise HTTPException(status_code=502, detail=f"Steam API rejected your credentials (Error {resp.status_code}): {error_text}")
+        raise HTTPException(status_code=502, detail=f"Steam API rejected the request (Error {resp.status_code}): {error_text}")
 
     data = resp.json()
     games_raw = data.get("response", {}).get("games", [])
@@ -380,7 +426,11 @@ async def api_import_steam(body: SteamImportRequest):
     if not games_raw:
         return {"imported": 0, "games": [], "message": "No games found — check your SteamID and that your profile is public."}
 
-    existing_titles = {r[1].lower() for r in list_games()}
+    # Persist this user's SteamID so sync/profile endpoints can use it later.
+    if not body.dry_run:
+        set_user_steam_id(user_id, body.steam_id)
+
+    existing_titles = {r[1].lower() for r in list_games(user_id)}
     preview = []
     imported = 0
 
@@ -391,9 +441,9 @@ async def api_import_steam(body: SteamImportRequest):
         preview.append({"title": name, "hours_played": hours, "platform": "Steam", "skipped": name.lower() in existing_titles})
 
         if not body.dry_run and name.lower() not in existing_titles:
-            gid = add_game(title=name, platform="Steam", genre="", year=None, status="Backlog", notes="", external_id=appid)
+            gid = add_game(user_id, title=name, platform="Steam", genre="", year=None, status="Backlog", notes="", external_id=appid)
             if hours > 0:
-                log_session(gid, hours, "Imported from Steam")
+                log_session(user_id, gid, hours, "Imported from Steam")
             imported += 1
 
     return {
@@ -404,8 +454,8 @@ async def api_import_steam(body: SteamImportRequest):
 
 
 @app.post("/api/import/epic")
-def api_import_epic(body: BulkImport):
-    existing_titles = {r[1].lower() for r in list_games()}
+def api_import_epic(body: BulkImport, user_id: str = Depends(get_current_user)):
+    existing_titles = {r[1].lower() for r in list_games(user_id)}
     imported = 0
     skipped = []
 
@@ -416,15 +466,15 @@ def api_import_epic(body: BulkImport):
         if title.lower() in existing_titles:
             skipped.append(title)
             continue
-        add_game(title=title, platform=body.platform, genre="", year=None, status="Backlog", notes="")
+        add_game(user_id, title=title, platform=body.platform, genre="", year=None, status="Backlog", notes="")
         imported += 1
 
     return {"imported": imported, "skipped": skipped}
 
 
 @app.post("/api/import/psn")
-def api_import_psn(body: BulkImport):
-    existing_titles = {r[1].lower() for r in list_games()}
+def api_import_psn(body: BulkImport, user_id: str = Depends(get_current_user)):
+    existing_titles = {r[1].lower() for r in list_games(user_id)}
     imported = 0
     skipped = []
 
@@ -435,7 +485,7 @@ def api_import_psn(body: BulkImport):
         if title.lower() in existing_titles:
             skipped.append(title)
             continue
-        add_game(title=title, platform=body.platform, genre="", year=None, status="Backlog", notes="")
+        add_game(user_id, title=title, platform=body.platform, genre="", year=None, status="Backlog", notes="")
         imported += 1
 
     return {"imported": imported, "skipped": skipped}
@@ -444,9 +494,9 @@ def api_import_psn(body: BulkImport):
 # ─── PER-GAME STATS + REFRESH ─────────────────────────────────────────────────
 
 @app.get("/api/games/{game_id}/steam-stats")
-def api_steam_stats(game_id: int):
+def api_steam_stats(game_id: int, user_id: str = Depends(get_current_user)):
     """Local stats panel for the per-game Sessions view. No Steam calls — uses the DB."""
-    row = get_game_local_stats(game_id)
+    row = get_game_local_stats(user_id, game_id)
     if not row:
         raise HTTPException(status_code=404, detail="Game not found")
     hours_played, last_played_at, last_session_date, hours_2weeks, external_id, title, platform = row
@@ -464,15 +514,14 @@ def api_steam_stats(game_id: int):
 
 
 @app.post("/api/games/{game_id}/refresh")
-def api_refresh_game(game_id: int):
+def api_refresh_game(game_id: int, user_id: str = Depends(get_current_user)):
     """Refresh one game from Steam: playtime delta, achievements, genre/year, last_played."""
-    # Pull what we need with an explicit column list so column-order changes can't bite us.
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT title, platform, genre, year, hours_played, external_id FROM games WHERE id = %s;",
-                (game_id,),
+                "SELECT title, platform, genre, year, hours_played, external_id FROM games WHERE id = %s AND user_id = %s;",
+                (game_id, user_id),
             )
             row = cur.fetchone()
     finally:
@@ -486,13 +535,14 @@ def api_refresh_game(game_id: int):
     if not external_id:
         raise HTTPException(status_code=400, detail="Game has no Steam AppID. Re-import it from Steam.")
 
-    api_key = os.getenv("STEAM_API_KEY")
-    steam_id = os.getenv("STEAM_ID")
-    if not api_key or not steam_id:
-        raise HTTPException(status_code=400, detail="STEAM_API_KEY / STEAM_ID missing from .env")
+    api_key = _get_steam_api_key()
+    steam_id = get_user_steam_id(user_id)
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Server STEAM_API_KEY is not configured.")
+    if not steam_id:
+        raise HTTPException(status_code=400, detail="No SteamID saved for your account. Import from Steam first.")
 
     with httpx.Client(timeout=30) as client:
-        # Pull one row from GetOwnedGames so the existing sync helper can use its index format
         owned_index: dict[str, dict] = {}
         try:
             r = client.get(
@@ -516,31 +566,28 @@ def api_refresh_game(game_id: int):
             owned_index[str(g.get("appid"))] = g
 
         if str(external_id) not in owned_index:
-            # Steam returned the response but this game wasn't in it — likely Steam stripped it.
-            # We still proceed so achievements can refresh, but playtime/last_played won't update.
             print(f"[refresh] appid {external_id} missing from GetOwnedGames response — skipping playtime/last_played update")
 
         try:
             _sync_one_steam_game(
-                game_id, str(external_id), hours_played, genre, year,
+                user_id, game_id, str(external_id), hours_played, genre, year,
                 api_key, steam_id, owned_index, client,
             )
-            _enrich_genre_year(game_id, str(external_id), genre, year, client)
-            set_game_sync_meta(game_id, "ok")
+            _enrich_genre_year(user_id, game_id, str(external_id), genre, year, client)
+            set_game_sync_meta(user_id, game_id, "ok")
         except httpx.TimeoutException:
-            set_game_sync_meta(game_id, "timeout")
+            set_game_sync_meta(user_id, game_id, "timeout")
             raise HTTPException(status_code=504, detail="Steam timed out — try again in a moment.")
         except Exception as e:
-            set_game_sync_meta(game_id, f"error: {type(e).__name__[:30]}"[:60])
+            set_game_sync_meta(user_id, game_id, f"error: {type(e).__name__[:30]}"[:60])
             raise HTTPException(status_code=502, detail=f"Refresh failed: {e}")
 
-    # Return the freshly-updated local stats so the UI can swap them in without a second round-trip
-    return api_steam_stats(game_id)
+    return api_steam_stats(game_id, user_id)
 
 
 @app.get("/api/dashboard/feed")
-def api_dashboard_feed():
-    """Returns: currently-playing (most recent rtime_last_played) + last 5 unlocks across the library."""
+def api_dashboard_feed(user_id: str = Depends(get_current_user)):
+    """Returns: currently-playing (most recent last_played) + last unlocks across the user's library."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -548,10 +595,11 @@ def api_dashboard_feed():
                 """
                 SELECT id, title, platform, external_id, hours_played, last_played_at
                 FROM games
-                WHERE last_played_at IS NOT NULL
+                WHERE user_id = %s AND last_played_at IS NOT NULL
                 ORDER BY last_played_at DESC
                 LIMIT 1;
-                """
+                """,
+                (user_id,),
             )
             cp_row = cur.fetchone()
 
@@ -563,11 +611,11 @@ def api_dashboard_feed():
                     """
                     SELECT title, icon_url, global_pct, unlocked_at
                     FROM achievements
-                    WHERE game_id = %s AND is_unlocked = TRUE
+                    WHERE game_id = %s AND user_id = %s AND is_unlocked = TRUE
                     ORDER BY unlocked_at DESC NULLS LAST
                     LIMIT 5;
                     """,
-                    (cp_id,),
+                    (cp_id, user_id),
                 )
                 for r in cur.fetchall():
                     cp_recent.append({
@@ -592,10 +640,11 @@ def api_dashboard_feed():
                        g.id, g.title, g.external_id
                 FROM achievements a
                 JOIN games g ON g.id = a.game_id
-                WHERE a.is_unlocked = TRUE AND a.unlocked_at IS NOT NULL
+                WHERE a.user_id = %s AND a.is_unlocked = TRUE AND a.unlocked_at IS NOT NULL
                 ORDER BY a.unlocked_at DESC
                 LIMIT 8;
-                """
+                """,
+                (user_id,),
             )
             recent_unlocks = [
                 {
@@ -619,12 +668,14 @@ STEAM_PROFILE_URL = "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/
 
 
 @app.get("/api/steam/profile")
-async def api_steam_profile():
-    """Returns the configured Steam user's avatar, name, profile URL. Cached cheaply on the client side."""
-    api_key = os.getenv("STEAM_API_KEY")
-    steam_id = os.getenv("STEAM_ID")
-    if not api_key or not steam_id:
-        raise HTTPException(status_code=400, detail="STEAM_API_KEY / STEAM_ID missing from .env")
+async def api_steam_profile(user_id: str = Depends(get_current_user)):
+    """Returns the user's Steam avatar, name, profile URL."""
+    api_key = _get_steam_api_key()
+    steam_id = get_user_steam_id(user_id)
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Server STEAM_API_KEY is not configured.")
+    if not steam_id:
+        raise HTTPException(status_code=400, detail="No SteamID saved for your account.")
 
     async with httpx.AsyncClient(timeout=10) as client:
         try:
@@ -653,12 +704,14 @@ STEAM_RECENT_URL = "https://api.steampowered.com/IPlayerService/GetRecentlyPlaye
 
 
 @app.get("/api/steam/recently-played")
-async def api_steam_recently_played():
-    """Pull last-2-weeks playtime from Steam, joined to our local game rows by AppID."""
-    api_key = os.getenv("STEAM_API_KEY")
-    steam_id = os.getenv("STEAM_ID")
-    if not api_key or not steam_id:
-        raise HTTPException(status_code=400, detail="STEAM_API_KEY or STEAM_ID missing from .env")
+async def api_steam_recently_played(user_id: str = Depends(get_current_user)):
+    """Pull last-2-weeks playtime from Steam, joined to the user's local game rows by AppID."""
+    api_key = _get_steam_api_key()
+    steam_id = get_user_steam_id(user_id)
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Server STEAM_API_KEY is not configured.")
+    if not steam_id:
+        raise HTTPException(status_code=400, detail="No SteamID saved for your account.")
 
     async with httpx.AsyncClient(timeout=15) as client:
         try:
@@ -674,9 +727,8 @@ async def api_steam_recently_played():
 
     games_raw = (resp.json().get("response") or {}).get("games") or []
 
-    # Build appid -> local game lookup so the UI can link straight into the per-game session view
     local_by_appid = {}
-    for r in list_steam_games_with_appid():
+    for r in list_steam_games_with_appid(user_id):
         gid, title, ext_id, *_ = r
         local_by_appid[str(ext_id)] = {"id": gid, "title": title}
 
@@ -701,14 +753,15 @@ async def api_steam_recently_played():
 
 @app.get("/api/health")
 def api_health():
-    """Cheap liveness probe used by the frontend to detect backend availability."""
+    """Cheap liveness probe used by the frontend to detect backend availability. Unauthenticated."""
     db_ok = True
     try:
         conn = get_connection()
         conn.close()
     except Exception:
         db_ok = False
-    steam_configured = bool(os.getenv("STEAM_API_KEY") and os.getenv("STEAM_ID"))
+    # steam_configured here reflects only whether the SERVER has an API key.
+    steam_configured = bool(_get_steam_api_key())
     return {"ok": db_ok, "db": db_ok, "steam_configured": steam_configured}
 
 
@@ -730,7 +783,7 @@ def _fetch_steam_appdetails(appid: str, client) -> dict:
         return {}
 
 
-def _enrich_genre_year(game_id, appid, current_genre, current_year, client):
+def _enrich_genre_year(user_id, game_id, appid, current_genre, current_year, client):
     """Look up genre + release year on the Steam Store if either is missing. Returns True if we made a network call."""
     needs_genre = not (current_genre and str(current_genre).strip())
     needs_year = current_year is None
@@ -746,24 +799,22 @@ def _enrich_genre_year(game_id, appid, current_genre, current_year, client):
         genres = data.get("genres") or []
         names = [g.get("description") for g in genres if g.get("description")]
         if names:
-            # Cap at 100 chars (schema limit)
             new_genre = ", ".join(names)[:100]
 
     new_year = None
     if needs_year:
         rd = (data.get("release_date") or {}).get("date") or ""
-        # Steam returns strings like "12 Aug, 2015" or "2020" — pick the last 4-digit number
         import re
         m = re.search(r"\b(19|20)\d{2}\b", rd)
         if m:
             new_year = int(m.group(0))
 
     if new_genre or new_year:
-        set_game_metadata(game_id, genre=new_genre, year=new_year)
+        set_game_metadata(user_id, game_id, genre=new_genre, year=new_year)
     return True
 
 
-def _sync_one_steam_game(game_id, appid, current_hours, current_genre, current_year, api_key, steam_id, owned_index, client):
+def _sync_one_steam_game(user_id, game_id, appid, current_hours, current_genre, current_year, api_key, steam_id, owned_index, client):
     """Sync playtime + achievements + genre/year + last_played for a single Steam game. Raises on Steam errors."""
     from datetime import datetime
     # 1) Playtime — log delta vs current DB value so we don't double-count
@@ -774,12 +825,11 @@ def _sync_one_steam_game(game_id, appid, current_hours, current_genre, current_y
         current = float(current_hours or 0)
         delta = round(steam_hours - current, 1)
         if delta > 0.05:
-            log_session(game_id, delta, "Auto-sync from Steam")
-        # rtime_last_played is Unix seconds — 0 means never launched on Steam
+            log_session(user_id, game_id, delta, "Auto-sync from Steam")
         rtime = int(info.get("rtime_last_played", 0) or 0)
         if rtime > 0:
             try:
-                set_game_last_played(game_id, datetime.fromtimestamp(rtime))
+                set_game_last_played(user_id, game_id, datetime.fromtimestamp(rtime))
             except Exception as e:
                 print(f"[sync] last_played write failed for {game_id}: {e}")
 
@@ -813,7 +863,7 @@ def _sync_one_steam_game(game_id, appid, current_hours, current_genre, current_y
         except (KeyError, TypeError, ValueError):
             pass
 
-    clear_game_achievements(game_id)
+    clear_game_achievements(user_id, game_id)
     count = 0
     for a in ach_schema:
         apiname = a.get("name")
@@ -824,7 +874,7 @@ def _sync_one_steam_game(game_id, appid, current_hours, current_genre, current_y
         unlocktime = int(pa.get("unlocktime", 0) or 0)
         unlocked_at = datetime.fromtimestamp(unlocktime) if (unlocked and unlocktime > 0) else None
         add_achievement(
-            game_id, name, desc, unlocked,
+            user_id, game_id, name, desc, unlocked,
             icon_url=a.get("icon"),
             icon_gray_url=a.get("icongray"),
             is_hidden=bool(a.get("hidden")),
@@ -835,20 +885,19 @@ def _sync_one_steam_game(game_id, appid, current_hours, current_genre, current_y
     return count
 
 
-def _run_full_steam_sync(trigger: str) -> dict:
-    """Full Steam sync over all games with an AppID. Sync-safe, callable from threadpool/scheduler."""
-    api_key = os.getenv("STEAM_API_KEY")
-    steam_id = os.getenv("STEAM_ID")
+def _run_full_steam_sync(user_id: str, trigger: str) -> dict:
+    """Full Steam sync over one user's games with an AppID. Callable from threadpool/scheduler."""
+    api_key = _get_steam_api_key()
+    steam_id = get_user_steam_id(user_id)
     if not api_key or not steam_id:
-        return {"ok": False, "synced": 0, "errors": 0, "message": "STEAM_API_KEY / STEAM_ID missing from .env"}
+        return {"ok": False, "synced": 0, "errors": 0, "message": "Steam not configured for this user."}
 
-    run_id = start_sync_run(trigger)
+    run_id = start_sync_run(user_id, trigger)
     synced = 0
     errors = 0
     backfilled = 0
 
     with httpx.Client(timeout=30) as client:
-        # 1) One call to GetOwnedGames builds the playtime index for every game
         owned_index: dict[str, dict] = {}
         try:
             r = client.get(
@@ -866,44 +915,36 @@ def _run_full_steam_sync(trigger: str) -> dict:
                     owned_index[str(g.get("appid"))] = g
         except Exception as e:
             print(f"[sync] GetOwnedGames failed: {e}")
-            # We can still try per-game achievement refresh, just no playtime updates.
 
-        # 1b) Backfill missing external_ids by exact title match against the owned-games index.
-        #     Games imported before the external_id column existed land here.
         if owned_index:
             by_title = {(g.get("name") or "").strip().lower(): str(g.get("appid"))
                         for g in owned_index.values() if g.get("appid")}
-            for (gid, title) in list_steam_games_missing_appid():
+            for (gid, title) in list_steam_games_missing_appid(user_id):
                 appid = by_title.get((title or "").strip().lower())
                 if appid:
-                    set_game_external_id(gid, appid)
+                    set_game_external_id(user_id, gid, appid)
                     backfilled += 1
             if backfilled:
                 print(f"[sync] Backfilled external_id for {backfilled} game(s) by title match")
 
-        # Now load the full set of syncable games (including the just-backfilled ones)
-        games = list_steam_games_with_appid()
+        games = list_steam_games_with_appid(user_id)
         if not games:
-            finish_sync_run(run_id, 0, 0)
+            finish_sync_run(user_id, run_id, 0, 0)
             return {"ok": True, "synced": 0, "errors": 0, "backfilled": backfilled, "message": "No Steam-linked games to sync."}
 
         import time
         for (gid, _title, appid, current_hours, current_genre, current_year) in games:
             try:
                 _sync_one_steam_game(
-                    gid, str(appid), current_hours, current_genre, current_year,
+                    user_id, gid, str(appid), current_hours, current_genre, current_year,
                     api_key, steam_id, owned_index, client,
                 )
-                # Genre/year enrichment via the rate-limited Store API
-                hit_store = _enrich_genre_year(gid, str(appid), current_genre, current_year, client)
-                set_game_sync_meta(gid, "ok")
+                hit_store = _enrich_genre_year(user_id, gid, str(appid), current_genre, current_year, client)
+                set_game_sync_meta(user_id, gid, "ok")
                 synced += 1
                 if hit_store:
-                    # Steam Store rate-limits ~200 req / 5 min — sleep ~1.5s between hits to stay safe
                     time.sleep(1.5)
             except Exception as e:
-                # Map common faults to short tags so we stay well under the status column width,
-                # and never let status-write failures abort the whole run.
                 if isinstance(e, httpx.TimeoutException):
                     tag = "timeout"
                 elif isinstance(e, httpx.HTTPError):
@@ -912,49 +953,46 @@ def _run_full_steam_sync(trigger: str) -> dict:
                     tag = "error"
                 detail = type(e).__name__[:30]
                 try:
-                    set_game_sync_meta(gid, f"{tag}: {detail}"[:60])
+                    set_game_sync_meta(user_id, gid, f"{tag}: {detail}"[:60])
                 except Exception as meta_e:
                     print(f"[sync] failed to record error for game {gid}: {meta_e}")
                 errors += 1
 
-    finish_sync_run(run_id, synced, errors)
+    finish_sync_run(user_id, run_id, synced, errors)
     return {"ok": True, "synced": synced, "errors": errors, "backfilled": backfilled, "trigger": trigger}
 
 
 def _scheduled_steam_sync():
-    """APScheduler entrypoint — guarded so manual + scheduled runs don't overlap."""
-    global _sync_in_progress
-    with _sync_lock:
-        if _sync_in_progress:
-            print("[scheduler] Skip — sync already in progress")
-            return
-        _sync_in_progress = True
-    try:
-        result = _run_full_steam_sync("scheduler")
-        print(f"[scheduler] {result}")
-    finally:
-        with _sync_lock:
-            _sync_in_progress = False
+    """APScheduler entrypoint — sync every user that has a SteamID, one at a time."""
+    if not _get_steam_api_key():
+        print("[scheduler] Skip — no server STEAM_API_KEY configured")
+        return
+    for (uid, _steam_id) in list_users_with_steam():
+        uid = str(uid)
+        if not _try_begin_sync(uid):
+            print(f"[scheduler] Skip {uid} — sync already in progress")
+            continue
+        try:
+            result = _run_full_steam_sync(uid, "scheduler")
+            print(f"[scheduler] {uid}: {result}")
+        finally:
+            _end_sync(uid)
 
 
 @app.post("/api/sync/all")
-def api_sync_all():
-    """Manually trigger a full Steam sync. Returns when complete (FastAPI runs sync defs in a threadpool)."""
-    global _sync_in_progress
-    with _sync_lock:
-        if _sync_in_progress:
-            raise HTTPException(status_code=409, detail="A sync is already in progress.")
-        _sync_in_progress = True
+def api_sync_all(user_id: str = Depends(get_current_user)):
+    """Manually trigger a full Steam sync for the current user."""
+    if not _try_begin_sync(user_id):
+        raise HTTPException(status_code=409, detail="A sync is already in progress.")
     try:
-        return _run_full_steam_sync("manual")
+        return _run_full_steam_sync(user_id, "manual")
     finally:
-        with _sync_lock:
-            _sync_in_progress = False
+        _end_sync(user_id)
 
 
 @app.get("/api/sync/status")
-def api_sync_status():
-    last = get_last_sync_run()
+def api_sync_status(user_id: str = Depends(get_current_user)):
+    last = get_last_sync_run(user_id)
     next_run = None
     if scheduler.running:
         job = scheduler.get_job("steam_sync")
@@ -969,9 +1007,11 @@ def api_sync_status():
             "errors": last[4] or 0,
             "trigger": last[5],
         }
+    with _sync_lock:
+        in_progress = user_id in _syncing_users
     return {
-        "in_progress": _sync_in_progress,
+        "in_progress": in_progress,
         "last_run": last_run,
         "next_run_at": next_run,
-        "steam_configured": bool(os.getenv("STEAM_API_KEY") and os.getenv("STEAM_ID")),
+        "steam_configured": bool(_get_steam_api_key() and get_user_steam_id(user_id)),
     }
