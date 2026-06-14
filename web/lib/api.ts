@@ -1,8 +1,29 @@
 import { supabase } from "@/lib/supabase/client";
 
 const isBrowser = typeof window !== "undefined";
-const defaultApiUrl = isBrowser ? `http://${window.location.hostname}:8000` : "http://localhost:8000";
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || defaultApiUrl;
+
+/**
+ * Resolve the backend base URL.
+ * - If NEXT_PUBLIC_API_URL is set, always use it (this is what production needs).
+ * - In local dev with nothing configured, fall back to the page's host on :8000.
+ * - In production with nothing configured, return "" so calls fail as OfflineError
+ *   (a visible "backend unreachable" banner) instead of silently hitting a wrong
+ *   `http://<domain>:8000` URL — which 404s and is blocked as mixed content on HTTPS.
+ */
+function resolveApiBase(): string {
+  const explicit = process.env.NEXT_PUBLIC_API_URL;
+  if (explicit) return explicit.replace(/\/+$/, "");
+  if (process.env.NODE_ENV === "production") {
+    console.error(
+      "NEXT_PUBLIC_API_URL is not set — the backend is unreachable. " +
+        "Set it to your deployed backend URL in the hosting environment.",
+    );
+    return "";
+  }
+  return isBrowser ? `http://${window.location.hostname}:8000` : "http://localhost:8000";
+}
+
+const API_BASE = resolveApiBase();
 
 export interface Game {
   id: number;
@@ -68,6 +89,11 @@ async function apiFetch(path: string, options?: RequestInit) {
     data: { session },
   } = await supabase.auth.getSession();
   const token = session?.access_token;
+
+  if (!API_BASE) {
+    // No backend URL configured (see resolveApiBase) — treat as offline.
+    throw new OfflineError("Backend URL is not configured.");
+  }
 
   let res: Response;
   try {

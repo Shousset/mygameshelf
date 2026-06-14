@@ -70,17 +70,17 @@ export default function AchievementsPage() {
   const [syncing, setSyncing] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
 
-  useEffect(() => { getGames().then(setGames); }, []);
+  useEffect(() => { getGames().then(setGames).catch(() => setGames([])); }, []);
 
   const loadAchievements = useCallback((game: Game) => {
     setSelectedGame(game);
     setLoading(true);
-    getAchievements(game.id).then(setAchievements).finally(() => setLoading(false));
+    getAchievements(game.id).then(setAchievements).catch(() => setAchievements([])).finally(() => setLoading(false));
   }, []);
 
   const handleToggle = async (ach: Achievement) => {
     const newStatus = !ach.is_unlocked;
-    setAchievements(achievements.map((a) => a.id === ach.id ? { ...a, is_unlocked: newStatus } : a));
+    setAchievements((prev) => prev.map((a) => a.id === ach.id ? { ...a, is_unlocked: newStatus } : a));
     await toggleAchievement(ach.id, newStatus).catch(() => {});
     // Reload dynamically to get the accurate timestamp
     if (selectedGame) loadAchievements(selectedGame);

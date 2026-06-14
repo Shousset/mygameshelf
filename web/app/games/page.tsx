@@ -28,14 +28,22 @@ export default function GamesPage() {
   const [error, setError] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [ratingModal, setRatingModal] = useState<Game | null>(null);
-  const [viewMode, setViewMode] = useState<"list" | "grid">(() => {
-    if (typeof window === "undefined") return "grid";
-    return (window.localStorage.getItem("mgs.viewMode") as "list" | "grid") || "grid";
-  });
+  // Start from a deterministic value so server and client render the same markup
+  // (reading localStorage in the initializer causes a hydration mismatch). The
+  // stored preference is applied right after mount.
+  const [viewMode, setViewMode] = useState<"list" | "grid">("grid");
+  const [viewModeLoaded, setViewModeLoaded] = useState(false);
 
   useEffect(() => {
-    if (typeof window !== "undefined") window.localStorage.setItem("mgs.viewMode", viewMode);
-  }, [viewMode]);
+    const stored = window.localStorage.getItem("mgs.viewMode") as "list" | "grid" | null;
+    if (stored === "list" || stored === "grid") setViewMode(stored);
+    setViewModeLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    // Don't overwrite storage with the default before we've read it.
+    if (viewModeLoaded) window.localStorage.setItem("mgs.viewMode", viewMode);
+  }, [viewMode, viewModeLoaded]);
 
   const load = useCallback((sf?: string) => {
     setLoading(true);

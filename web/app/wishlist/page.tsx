@@ -13,7 +13,7 @@ export default function WishlistPage() {
 
   const load = useCallback(() => {
     setLoading(true);
-    getWishlist().then(setItems).finally(() => setLoading(false));
+    getWishlist().then(setItems).catch(() => setItems([])).finally(() => setLoading(false));
   }, []);
 
   useEffect(() => { load(); }, [load]);

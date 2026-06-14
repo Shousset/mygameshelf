@@ -1,0 +1,237 @@
+{
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\alter.py": {
+    "mtime": 1774321742.4586742,
+    "ast_hash": "00303627e89cec851ae59d3701b84288",
+    "semantic_hash": "00303627e89cec851ae59d3701b84288"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\api\\__init__.py": {
+    "mtime": 1773800518.1617098,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\api\\auth.py": {
+    "mtime": 1781443332.8659737,
+    "ast_hash": "18abaa3959ea6fb54f2a810153f1194c",
+    "semantic_hash": "18abaa3959ea6fb54f2a810153f1194c"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\api\\main.py": {
+    "mtime": 1781443762.326764,
+    "ast_hash": "181850646d76114ba3f11e7656a355b8",
+    "semantic_hash": "181850646d76114ba3f11e7656a355b8"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\db\\__init__.py": {
+    "mtime": 1773147773.273434,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\db\\connection.py": {
+    "mtime": 1779324825.3177845,
+    "ast_hash": "58c188c39b204c671819722d613ac03f",
+    "semantic_hash": "58c188c39b204c671819722d613ac03f"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\db\\migrations\\001_multi_tenant.sql": {
+    "mtime": 1781443364.8800375,
+    "ast_hash": "69bd7cb38069d3a4e36f9ab0bc6f6319",
+    "semantic_hash": "69bd7cb38069d3a4e36f9ab0bc6f6319"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\db\\models.py": {
+    "mtime": 1781443491.304177,
+    "ast_hash": "31cff65f7e24a3b7f79eeed0f91725db",
+    "semantic_hash": "31cff65f7e24a3b7f79eeed0f91725db"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\db\\schema.sql": {
+    "mtime": 1781443355.9275982,
+    "ast_hash": "3c167912d027c4ce06311ba3b4582aad",
+    "semantic_hash": "3c167912d027c4ce06311ba3b4582aad"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\db\\seed.py": {
+    "mtime": 1773147755.302458,
+    "ast_hash": "8f5055f26ee04f2f4fb1c4d5cc1343ed",
+    "semantic_hash": "8f5055f26ee04f2f4fb1c4d5cc1343ed"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\main.py": {
+    "mtime": 1773328061.5185366,
+    "ast_hash": "9b410f9948b3efbfa84bb2d129d4d25a",
+    "semantic_hash": "9b410f9948b3efbfa84bb2d129d4d25a"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\run_init_schema.py": {
+    "mtime": 1773322415.3949502,
+    "ast_hash": "cabef2f7327fe3003ef953152ae9a697",
+    "semantic_hash": "cabef2f7327fe3003ef953152ae9a697"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\test_db_connection.py": {
+    "mtime": 1773322165.0014184,
+    "ast_hash": "41bd83cdffac79db7edb9c512f698c46",
+    "semantic_hash": "41bd83cdffac79db7edb9c512f698c46"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\ui\\__init__.py": {
+    "mtime": 1773147783.3744018,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\ui\\display.py": {
+    "mtime": 1773147691.019379,
+    "ast_hash": "2e95f7c01f6da8d990453fc08e4cc186",
+    "semantic_hash": "2e95f7c01f6da8d990453fc08e4cc186"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\.claude\\settings.local.json": {
+    "mtime": 1779975947.5302951,
+    "ast_hash": "ef21863dcda092ec283147882f42ffba",
+    "semantic_hash": "ef21863dcda092ec283147882f42ffba"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\app\\achievements\\page.tsx": {
+    "mtime": 1779322930.879866,
+    "ast_hash": "9a8f31173a4f58d24ca12171922569fc",
+    "semantic_hash": "9a8f31173a4f58d24ca12171922569fc"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\app\\games\\page.tsx": {
+    "mtime": 1779323235.000469,
+    "ast_hash": "ce510ef9439814496d90c55303e3f7fb",
+    "semantic_hash": "ce510ef9439814496d90c55303e3f7fb"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\app\\import\\page.tsx": {
+    "mtime": 1781443932.9618802,
+    "ast_hash": "540d09558ba475ddb42a1c3890117cdc",
+    "semantic_hash": "540d09558ba475ddb42a1c3890117cdc"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\app\\layout.tsx": {
+    "mtime": 1779323284.1017957,
+    "ast_hash": "63faba09b531d61e7401ef8649d5f975",
+    "semantic_hash": "63faba09b531d61e7401ef8649d5f975"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\app\\login\\page.tsx": {
+    "mtime": 1781443961.8777244,
+    "ast_hash": "2eaba3522dc0419102cda68987969bd7",
+    "semantic_hash": "2eaba3522dc0419102cda68987969bd7"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\app\\page.tsx": {
+    "mtime": 1779323349.3854835,
+    "ast_hash": "a7e488c570fcab300208b4390034ba1e",
+    "semantic_hash": "a7e488c570fcab300208b4390034ba1e"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\app\\sessions\\page.tsx": {
+    "mtime": 1779323327.2646348,
+    "ast_hash": "1cb43b1f685b3e8d8b163da03cf912fa",
+    "semantic_hash": "1cb43b1f685b3e8d8b163da03cf912fa"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\app\\settings\\page.tsx": {
+    "mtime": 1779322792.5573509,
+    "ast_hash": "dfccceda1cf2345c1aae0488ad186796",
+    "semantic_hash": "dfccceda1cf2345c1aae0488ad186796"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\app\\signup\\page.tsx": {
+    "mtime": 1781443971.8174567,
+    "ast_hash": "755681a9f18d77fd5998963e33408c7d",
+    "semantic_hash": "755681a9f18d77fd5998963e33408c7d"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\app\\wishlist\\page.tsx": {
+    "mtime": 1779322792.5578582,
+    "ast_hash": "fd431f6d020f8f9f5488659a6e98d59a",
+    "semantic_hash": "fd431f6d020f8f9f5488659a6e98d59a"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\components\\ConnectionStatus.tsx": {
+    "mtime": 1779315677.0468116,
+    "ast_hash": "76a689795c9672dc1f7a1f3eeedd6f97",
+    "semantic_hash": "76a689795c9672dc1f7a1f3eeedd6f97"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\components\\GameCover.tsx": {
+    "mtime": 1779322866.316504,
+    "ast_hash": "1d4c3041c3defef474b8c880936cb4fe",
+    "semantic_hash": "1d4c3041c3defef474b8c880936cb4fe"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\components\\Sidebar.tsx": {
+    "mtime": 1781444015.5404818,
+    "ast_hash": "1d5a7b611435f09f97685254bf1f1460",
+    "semantic_hash": "1d5a7b611435f09f97685254bf1f1460"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\components\\Skeleton.tsx": {
+    "mtime": 1779323221.916132,
+    "ast_hash": "279d5a235864a52a9180a3ad8a0c853b",
+    "semantic_hash": "279d5a235864a52a9180a3ad8a0c853b"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\eslint.config.mjs": {
+    "mtime": 1773800719.5183456,
+    "ast_hash": "dfa1f5f6a7037bf39dc510f30b180002",
+    "semantic_hash": "dfa1f5f6a7037bf39dc510f30b180002"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\lib\\api.ts": {
+    "mtime": 1781443906.6589463,
+    "ast_hash": "c9543e38f99b42d4d364262b122f75a8",
+    "semantic_hash": "c9543e38f99b42d4d364262b122f75a8"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\lib\\supabase\\client.ts": {
+    "mtime": 1781443867.777918,
+    "ast_hash": "2ab0a41d11d945a86d6e30348ed8e3e4",
+    "semantic_hash": "2ab0a41d11d945a86d6e30348ed8e3e4"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\next-env.d.ts": {
+    "mtime": 1781442715.8817348,
+    "ast_hash": "2a74d3909800ca5467fa83b0ab4a4890",
+    "semantic_hash": "2a74d3909800ca5467fa83b0ab4a4890"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\next.config.ts": {
+    "mtime": 1773800720.2546937,
+    "ast_hash": "073c476be067d6d4649b355483ee2690",
+    "semantic_hash": "073c476be067d6d4649b355483ee2690"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\package.json": {
+    "mtime": 1781444062.1013465,
+    "ast_hash": "8c3f3c4b9fcc76da7877afda8773cb83",
+    "semantic_hash": "8c3f3c4b9fcc76da7877afda8773cb83"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\postcss.config.mjs": {
+    "mtime": 1773800719.589937,
+    "ast_hash": "239f3ebf717465dc636818a1a619398d",
+    "semantic_hash": "239f3ebf717465dc636818a1a619398d"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\proxy.ts": {
+    "mtime": 1781444184.7206948,
+    "ast_hash": "8578823e563e6ef50e791028daf93dff",
+    "semantic_hash": "8578823e563e6ef50e791028daf93dff"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\tsconfig.json": {
+    "mtime": 1773800720.2646313,
+    "ast_hash": "02fc19ad21338c2ab820a70136310db4",
+    "semantic_hash": "02fc19ad21338c2ab820a70136310db4"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\README.md": {
+    "mtime": 1779324885.6688783,
+    "ast_hash": "3169f250d1d064df91379f27c0939e1d",
+    "semantic_hash": "3169f250d1d064df91379f27c0939e1d"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\requirements.txt": {
+    "mtime": 1781443408.9827738,
+    "ast_hash": "f9fe3b21e1fc8471321228af3b47b3b5",
+    "semantic_hash": "f9fe3b21e1fc8471321228af3b47b3b5"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\README.md": {
+    "mtime": 1773800719.4599433,
+    "ast_hash": "f15aaa42d5d299d091b1171097ea56ad",
+    "semantic_hash": "f15aaa42d5d299d091b1171097ea56ad"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\public\\file.svg": {
+    "mtime": 1773800719.6091363,
+    "ast_hash": "d09f95206c3fa0bb9bd9fefabfd0ea71",
+    "semantic_hash": "d09f95206c3fa0bb9bd9fefabfd0ea71"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\public\\globe.svg": {
+    "mtime": 1773800719.6313143,
+    "ast_hash": "2aaafa6a49b6563925fe440891e32717",
+    "semantic_hash": "2aaafa6a49b6563925fe440891e32717"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\public\\next.svg": {
+    "mtime": 1773800719.6591272,
+    "ast_hash": "8e061864f388b47f33a1c3780831193e",
+    "semantic_hash": "8e061864f388b47f33a1c3780831193e"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\public\\vercel.svg": {
+    "mtime": 1773800719.684629,
+    "ast_hash": "c0af2f507b369b085b35ef4bbe3bcf1e",
+    "semantic_hash": "c0af2f507b369b085b35ef4bbe3bcf1e"
+  },
+  "C:\\Users\\shousset\\Documents\\Tecnico-en-Desarrollo-de-Software\\Proyectos-personales\\proyectos_web\\mygameshelf\\web\\public\\window.svg": {
+    "mtime": 1773800719.7032986,
+    "ast_hash": "a2760511c65806022ad20adf74370ff3",
+    "semantic_hash": "a2760511c65806022ad20adf74370ff3"
+  }
+}

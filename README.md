@@ -73,6 +73,26 @@ cd ..
 
 ### 6. Run
 
+**One command (recommended) — starts backend + frontend together:**
+
+```powershell
+# Windows (PowerShell)
+.\start.ps1
+```
+```bash
+# Linux / macOS
+./start.sh
+```
+
+On first run this creates an isolated Python venv (`.venv`), installs backend
+dependencies, runs `npm install` if needed, then launches **uvicorn on :8000**
+and **Next.js on :3000** in the same console. Press **Ctrl+C** once to stop both.
+This guarantees the backend is reachable whenever the page is loaded. (On Windows
+you can also just double-click `start.bat`.)
+
+<details>
+<summary>Or run the two processes manually</summary>
+
 **Backend (terminal 1):**
 ```bash
 python -m uvicorn api.main:app --reload --port 8000
@@ -84,6 +104,7 @@ The database schema is created automatically on first startup.
 cd web
 npm run dev
 ```
+</details>
 
 Open <http://localhost:3000>.
 

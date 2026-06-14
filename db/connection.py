@@ -14,7 +14,7 @@ def get_connection():
         )
     return psycopg2.connect(
         host=os.getenv("DB_HOST", "localhost"),
-        port=os.getenv("DB_PORT", 5432),
+        port=int(os.getenv("DB_PORT", 5432)),
         dbname=os.getenv("DB_NAME", "mygameshelf"),
         user=os.getenv("DB_USER", "postgres"),
         password=password,
@@ -24,7 +24,7 @@ def get_connection():
 def initialize_schema():
     """Run schema.sql to create tables if they don't exist."""
     schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
-    with open(schema_path, "r") as f:
+    with open(schema_path, "r", encoding="utf-8") as f:
         sql = f.read()
     conn = get_connection()
     try:

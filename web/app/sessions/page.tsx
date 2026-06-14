@@ -14,7 +14,7 @@ export default function SessionsPage() {
   const [recent, setRecent] = useState<RecentlyPlayedGame[] | null>(null);
   const [recentError, setRecentError] = useState<string>("");
 
-  useEffect(() => { getGames().then(setGames); }, []);
+  useEffect(() => { getGames().then(setGames).catch(() => setGames([])); }, []);
 
   useEffect(() => {
     getRecentlyPlayed()
@@ -28,7 +28,7 @@ export default function SessionsPage() {
   const loadSessions = useCallback((game: Game) => {
     setSelectedGame(game);
     setLoadingSessions(true);
-    getSessions(game.id).then(setSessions).finally(() => setLoadingSessions(false));
+    getSessions(game.id).then(setSessions).catch(() => setSessions([])).finally(() => setLoadingSessions(false));
   }, []);
 
   const openLocalGame = (localId: number) => {

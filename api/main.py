@@ -41,8 +41,16 @@ from api.auth import get_current_user
 app = FastAPI(title="MyGameShelf API", version="2.0.0")
 
 # CORS — restrict to the deployed frontend(s). Configure via ALLOWED_ORIGINS (comma-separated).
-_allowed = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
+_allowed_env = os.getenv("ALLOWED_ORIGINS")
+_allowed = _allowed_env or "http://localhost:3000"
 ALLOWED_ORIGINS = [o.strip() for o in _allowed.split(",") if o.strip()]
+# In production the localhost default will silently block the real frontend — warn loudly
+# so a forgotten env var is caught in the deploy logs instead of as a mystery CORS error.
+if not _allowed_env:
+    print(
+        "[WARNING] ALLOWED_ORIGINS is not set — defaulting to http://localhost:3000. "
+        "Set it to your deployed frontend URL(s) before publishing."
+    )
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -76,6 +84,24 @@ def _end_sync(user_id: str):
 @app.on_event("startup")
 def on_startup():
     try:
+        # PRE-MIGRATION for legacy single-tenant DBs: ensure the multi-tenant
+        # `user_id` column exists on every table BEFORE initialize_schema() runs,
+        # because schema.sql creates `CREATE INDEX ... ON games(user_id)` which
+        # fails on an old table that predates the column — and that failure would
+        # otherwise abort the whole schema init (so the columns would never get
+        # added). `ALTER TABLE IF EXISTS` is a no-op on a fresh DB.
+        try:
+            pre = get_connection()
+            try:
+                with pre.cursor() as cur:
+                    for _t in ("games", "sessions", "wishlist", "achievements", "sync_runs"):
+                        cur.execute(f"ALTER TABLE IF EXISTS {_t} ADD COLUMN IF NOT EXISTS user_id UUID;")
+                pre.commit()
+            finally:
+                pre.close()
+        except Exception as e:
+            print(f"[WARNING] user_id pre-migration failed: {e}")
+
         initialize_schema()
         # LIVE PATCHES for older DBs predating these columns/tables.
         conn = get_connection()
@@ -309,7 +335,8 @@ def api_add_achievement(game_id: int, body: AchievementCreate, user_id: str = De
 
 @app.put("/api/achievements/{ach_id}/toggle")
 def api_toggle_achievement(ach_id: int, body: AchievementToggle, user_id: str = Depends(get_current_user)):
-    toggle_achievement(user_id, ach_id, body.is_unlocked)
+    if not toggle_achievement(user_id, ach_id, body.is_unlocked):
+        raise HTTPException(status_code=404, detail="Achievement not found")
     return {"ok": True}
 
 
@@ -897,69 +924,81 @@ def _run_full_steam_sync(user_id: str, trigger: str) -> dict:
     errors = 0
     backfilled = 0
 
-    with httpx.Client(timeout=30) as client:
-        owned_index: dict[str, dict] = {}
-        try:
-            r = client.get(
-                STEAM_OWNED_URL,
-                params={
-                    "key": api_key,
-                    "steamid": steam_id,
-                    "include_appinfo": "true",
-                    "include_played_free_games": "true",
-                    "format": "json",
-                },
-            )
-            if r.status_code == 200:
-                for g in r.json().get("response", {}).get("games", []):
-                    owned_index[str(g.get("appid"))] = g
-        except Exception as e:
-            print(f"[sync] GetOwnedGames failed: {e}")
-
-        if owned_index:
-            by_title = {(g.get("name") or "").strip().lower(): str(g.get("appid"))
-                        for g in owned_index.values() if g.get("appid")}
-            for (gid, title) in list_steam_games_missing_appid(user_id):
-                appid = by_title.get((title or "").strip().lower())
-                if appid:
-                    set_game_external_id(user_id, gid, appid)
-                    backfilled += 1
-            if backfilled:
-                print(f"[sync] Backfilled external_id for {backfilled} game(s) by title match")
-
-        games = list_steam_games_with_appid(user_id)
-        if not games:
-            finish_sync_run(user_id, run_id, 0, 0)
-            return {"ok": True, "synced": 0, "errors": 0, "backfilled": backfilled, "message": "No Steam-linked games to sync."}
-
-        import time
-        for (gid, _title, appid, current_hours, current_genre, current_year) in games:
+    # Guard the whole run: any unexpected failure (DB error, network blowup outside
+    # the per-game loop) must still close out the sync_runs row, otherwise it stays
+    # marked "in progress" forever and /api/sync/status reports a stuck run.
+    try:
+        with httpx.Client(timeout=30) as client:
+            owned_index: dict[str, dict] = {}
             try:
-                _sync_one_steam_game(
-                    user_id, gid, str(appid), current_hours, current_genre, current_year,
-                    api_key, steam_id, owned_index, client,
+                r = client.get(
+                    STEAM_OWNED_URL,
+                    params={
+                        "key": api_key,
+                        "steamid": steam_id,
+                        "include_appinfo": "true",
+                        "include_played_free_games": "true",
+                        "format": "json",
+                    },
                 )
-                hit_store = _enrich_genre_year(user_id, gid, str(appid), current_genre, current_year, client)
-                set_game_sync_meta(user_id, gid, "ok")
-                synced += 1
-                if hit_store:
-                    time.sleep(1.5)
+                if r.status_code == 200:
+                    for g in r.json().get("response", {}).get("games", []):
+                        owned_index[str(g.get("appid"))] = g
             except Exception as e:
-                if isinstance(e, httpx.TimeoutException):
-                    tag = "timeout"
-                elif isinstance(e, httpx.HTTPError):
-                    tag = "http_error"
-                else:
-                    tag = "error"
-                detail = type(e).__name__[:30]
-                try:
-                    set_game_sync_meta(user_id, gid, f"{tag}: {detail}"[:60])
-                except Exception as meta_e:
-                    print(f"[sync] failed to record error for game {gid}: {meta_e}")
-                errors += 1
+                print(f"[sync] GetOwnedGames failed: {e}")
 
-    finish_sync_run(user_id, run_id, synced, errors)
-    return {"ok": True, "synced": synced, "errors": errors, "backfilled": backfilled, "trigger": trigger}
+            if owned_index:
+                by_title = {(g.get("name") or "").strip().lower(): str(g.get("appid"))
+                            for g in owned_index.values() if g.get("appid")}
+                for (gid, title) in list_steam_games_missing_appid(user_id):
+                    appid = by_title.get((title or "").strip().lower())
+                    if appid:
+                        set_game_external_id(user_id, gid, appid)
+                        backfilled += 1
+                if backfilled:
+                    print(f"[sync] Backfilled external_id for {backfilled} game(s) by title match")
+
+            games = list_steam_games_with_appid(user_id)
+            if not games:
+                finish_sync_run(user_id, run_id, 0, 0)
+                return {"ok": True, "synced": 0, "errors": 0, "backfilled": backfilled, "message": "No Steam-linked games to sync."}
+
+            import time
+            for (gid, _title, appid, current_hours, current_genre, current_year) in games:
+                try:
+                    _sync_one_steam_game(
+                        user_id, gid, str(appid), current_hours, current_genre, current_year,
+                        api_key, steam_id, owned_index, client,
+                    )
+                    hit_store = _enrich_genre_year(user_id, gid, str(appid), current_genre, current_year, client)
+                    set_game_sync_meta(user_id, gid, "ok")
+                    synced += 1
+                    if hit_store:
+                        time.sleep(1.5)
+                except Exception as e:
+                    if isinstance(e, httpx.TimeoutException):
+                        tag = "timeout"
+                    elif isinstance(e, httpx.HTTPError):
+                        tag = "http_error"
+                    else:
+                        tag = "error"
+                    detail = type(e).__name__[:30]
+                    try:
+                        set_game_sync_meta(user_id, gid, f"{tag}: {detail}"[:60])
+                    except Exception as meta_e:
+                        print(f"[sync] failed to record error for game {gid}: {meta_e}")
+                    errors += 1
+
+        finish_sync_run(user_id, run_id, synced, errors)
+        return {"ok": True, "synced": synced, "errors": errors, "backfilled": backfilled, "trigger": trigger}
+    except Exception:
+        # Close the run row before propagating so the user isn't stuck behind a
+        # phantom "sync in progress" state.
+        try:
+            finish_sync_run(user_id, run_id, synced, errors)
+        except Exception as fin_e:
+            print(f"[sync] failed to finalize stuck run {run_id}: {fin_e}")
+        raise
 
 
 def _scheduled_steam_sync():

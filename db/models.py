@@ -280,6 +280,8 @@ def list_achievements(user_id, game_id):
 
 
 def toggle_achievement(user_id, ach_id, is_unlocked):
+    """Flip an achievement's unlocked state. Returns the number of rows updated
+    (0 means the achievement doesn't exist or isn't owned by this user)."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -288,7 +290,9 @@ def toggle_achievement(user_id, ach_id, is_unlocked):
                 f"UPDATE achievements SET is_unlocked = %s, unlocked_at = {time_sql} WHERE id = %s AND user_id = %s;",
                 (is_unlocked, ach_id, user_id),
             )
+            updated = cur.rowcount
         conn.commit()
+        return updated
     finally:
         conn.close()
 
