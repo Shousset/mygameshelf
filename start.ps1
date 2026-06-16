@@ -60,13 +60,17 @@ try {
     $procs += Start-Process -FilePath $venvPy -ArgumentList $uvicornArgs `
         -WorkingDirectory $root -NoNewWindow -PassThru
 
+    Write-Host "[run] Sync worker (Steam job queue)" -ForegroundColor Green
+    $procs += Start-Process -FilePath $venvPy -ArgumentList @("worker.py") `
+        -WorkingDirectory $root -NoNewWindow -PassThru
+
     Write-Host "[run] Next.js  -> http://localhost:3000" -ForegroundColor Green
     # npm on Windows is a shell script, not a Win32 exe — go through cmd.exe so
     # Start-Process can launch it. Killing the cmd.exe tree (/T) stops node too.
     $procs += Start-Process -FilePath "cmd.exe" -ArgumentList @("/c", "npm", "run", "dev") `
         -WorkingDirectory $webDir -NoNewWindow -PassThru
 
-    Write-Host "`nBoth running. Open http://localhost:3000  —  press Ctrl+C to stop both.`n" -ForegroundColor Cyan
+    Write-Host "`nAll running. Open http://localhost:3000  —  press Ctrl+C to stop everything.`n" -ForegroundColor Cyan
 
     if ($Open) {
         Start-Job { Start-Sleep 6; Start-Process "http://localhost:3000" } | Out-Null

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ExternalLink, RefreshCw, CheckCircle2, AlertCircle } from "lucide-react";
-import { getSyncStatus, syncAll, OfflineError, type SyncStatus } from "@/lib/api";
+import { getSyncStatus, syncAll, steamOpenIdLogin, steamOpenIdVerify, getPlan, OfflineError, type SyncStatus, type PlanInfo } from "@/lib/api";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -45,20 +45,56 @@ function AutoSyncSection() {
 
   useEffect(() => {
     refresh();
-    const id = setInterval(refresh, 15_000);
+    // Poll faster while a job is queued/running so progress shows up quickly.
+    const ms = status?.in_progress ? 4_000 : 15_000;
+    const id = setInterval(refresh, ms);
     return () => clearInterval(id);
+  }, [status?.in_progress]);
+
+  // Handle the return from "Sign in through Steam": Steam redirects back here
+  // with openid.* params; POST them to the backend to link the SteamID.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    if (sp.get("openid.mode") !== "id_res") return;
+    const params: Record<string, string> = {};
+    sp.forEach((v, k) => { if (k.startsWith("openid.")) params[k] = v; });
+    (async () => {
+      try {
+        const res = await steamOpenIdVerify(params);
+        setMsg({ kind: "ok", text: `Steam account linked (${res.steam_id}).` });
+        await refresh();
+      } catch (e) {
+        setMsg({ kind: "err", text: (e as Error).message || "Steam sign-in failed." });
+      } finally {
+        // Strip the openid params so a refresh doesn't re-trigger verification.
+        window.history.replaceState({}, "", window.location.pathname);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const handleLinkSteam = async () => {
+    try {
+      const { redirect_url } = await steamOpenIdLogin();
+      window.location.href = redirect_url;
+    } catch (e) {
+      const text = e instanceof OfflineError
+        ? "Backend unreachable. Start the FastAPI server, then try again."
+        : (e as Error).message || "Could not start Steam sign-in.";
+      setMsg({ kind: "err", text });
+    }
+  };
 
   const handleSync = async () => {
     setLoading(true);
     setMsg(null);
     try {
-      const result = await syncAll();
+      // Sync now runs in the background worker; this just queues it.
+      await syncAll();
       setMsg({
         kind: "ok",
-        text: result.message
-          ? result.message
-          : `Synced ${result.synced} game(s)${result.errors ? `, ${result.errors} error(s)` : ""}.`,
+        text: "Sync queued — running in the background. This page updates automatically.",
       });
       await refresh();
     } catch (e) {
@@ -72,6 +108,14 @@ function AutoSyncSection() {
   };
 
   const inProgress = status?.in_progress || loading;
+  const activeStatus = status?.active_job?.status;
+  const btnLabel = loading
+    ? "Queuing..."
+    : activeStatus === "running"
+      ? "Syncing..."
+      : activeStatus === "queued"
+        ? "Queued..."
+        : "Sync now";
   const lastRun = status?.last_run;
 
   return (
@@ -80,10 +124,19 @@ function AutoSyncSection() {
         Re-fetches Steam playtime and achievements for every game linked to a Steam AppID. Runs automatically every 6 hours; you can also trigger it manually here.
       </p>
 
-      <InfoRow label="Steam credentials" value={status?.steam_configured ? "Loaded from .env" : "Missing — set STEAM_API_KEY and STEAM_ID in .env"} />
+      <InfoRow label="Steam account" value={status?.steam_linked ? "Linked ✓" : "Not linked"} />
+      <div style={{ marginTop: "0.75rem", marginBottom: "1rem" }}>
+        <button className="btn-primary" onClick={handleLinkSteam}>
+          {status?.steam_configured ? "Re-link Steam account" : "Sign in through Steam"}
+        </button>
+        <span style={{ marginLeft: "0.75rem", color: "#8f98a0", fontSize: "0.8rem" }}>
+          Links your SteamID automatically — no need to paste your 17-digit ID.
+        </span>
+      </div>
       <InfoRow label="Last sync" value={fmtTime(lastRun?.finished_at ?? lastRun?.started_at ?? null)} />
       <InfoRow label="Last result" value={lastRun ? `${lastRun.games_synced} synced, ${lastRun.errors} errors (${lastRun.trigger ?? "?"})` : "—"} />
       <InfoRow label="Next scheduled run" value={fmtTime(status?.next_run_at ?? null)} mono />
+      <InfoRow label="Steam API calls today" value={status?.steam_calls_today != null ? String(status.steam_calls_today) : "—"} mono />
 
       <div style={{ marginTop: "1rem", display: "flex", gap: "0.75rem", alignItems: "center" }}>
         <button
@@ -93,7 +146,7 @@ function AutoSyncSection() {
           title={!status?.steam_configured ? "Set STEAM_API_KEY and STEAM_ID in mygameshelf/.env first" : undefined}
         >
           <RefreshCw size={14} style={{ marginRight: "0.4rem", display: "inline", animation: inProgress ? "spin 1s linear infinite" : undefined }} />
-          {inProgress ? "Syncing..." : "Sync now"}
+          {btnLabel}
         </button>
         {msg && (
           <div
@@ -117,6 +170,46 @@ function AutoSyncSection() {
   );
 }
 
+function PlanSection() {
+  const [plan, setPlan] = useState<PlanInfo | null>(null);
+
+  useEffect(() => {
+    getPlan().then(setPlan).catch(() => {});
+  }, []);
+
+  const unlimited = plan?.max_games == null;
+  const pct = plan && plan.max_games
+    ? Math.min(100, Math.round((plan.games_used / plan.max_games) * 100))
+    : 0;
+  const near = !unlimited && pct >= 80;
+
+  return (
+    <Section title="💳 Plan">
+      <InfoRow label="Current plan" value={plan ? (plan.plan === "pro" ? "Pro" : "Free") : "—"} />
+      <InfoRow
+        label="Library usage"
+        value={plan ? (unlimited ? `${plan.games_used} games (unlimited)` : `${plan.games_used} / ${plan.max_games} games`) : "—"}
+      />
+      {plan && !unlimited && (
+        <div style={{ marginTop: "0.75rem" }}>
+          <div style={{ height: 8, borderRadius: 6, background: "rgba(102,192,244,0.15)", overflow: "hidden" }}>
+            <div style={{ width: `${pct}%`, height: "100%", background: near ? "#fbbf24" : "#66c0f4", transition: "width 0.3s" }} />
+          </div>
+          {plan.games_remaining === 0 ? (
+            <p style={{ margin: "0.6rem 0 0", color: "#fca5a5", fontSize: "0.82rem" }}>
+              Library full. Upgrade to Pro for unlimited games.
+            </p>
+          ) : near ? (
+            <p style={{ margin: "0.6rem 0 0", color: "#fbbf24", fontSize: "0.82rem" }}>
+              {plan.games_remaining} slot(s) left on Free. Upgrade to Pro for unlimited.
+            </p>
+          ) : null}
+        </div>
+      )}
+    </Section>
+  );
+}
+
 export default function SettingsPage() {
   return (
     <div>
@@ -133,6 +226,8 @@ export default function SettingsPage() {
         <InfoRow label="Start backend" value="uvicorn api.main:app --reload --port 8000" mono />
         <InfoRow label="Start frontend" value="npm run dev (in web/)" mono />
       </Section>
+
+      <PlanSection />
 
       <AutoSyncSection />
 

@@ -24,6 +24,41 @@ _SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").rstrip("/")
 JWT_ISSUER = f"{_SUPABASE_URL}/auth/v1" if _SUPABASE_URL else None
 
 
+def _decode_user_id(token: str) -> str:
+    """Verify a Supabase JWT and return its subject (user UUID). Raises on failure."""
+    decode_kwargs = {
+        "algorithms": ["HS256"],
+        "audience": JWT_AUDIENCE,
+        "options": {"require": ["exp", "sub"]},
+    }
+    if JWT_ISSUER:
+        decode_kwargs["issuer"] = JWT_ISSUER
+    payload = jwt.decode(token, SUPABASE_JWT_SECRET, **decode_kwargs)
+    user_id = payload.get("sub")
+    if not user_id:
+        raise jwt.PyJWTError("Token is missing a subject (sub) claim.")
+    return user_id
+
+
+def extract_user_id(authorization: str | None) -> str | None:
+    """Non-fatal variant for middleware: returns the user UUID from a Bearer
+    token, or None if the header is absent/invalid. Never raises.
+
+    Used to populate the per-request tenant context (db.context) so RLS can scope
+    queries. Endpoints still enforce auth via get_current_user — this only sets
+    the context and must not break unauthenticated routes.
+    """
+    if not SUPABASE_JWT_SECRET:
+        return None
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization.split(" ", 1)[1].strip()
+    try:
+        return _decode_user_id(token)
+    except Exception:
+        return None
+
+
 def get_current_user(authorization: str | None = Header(default=None)) -> str:
     """FastAPI dependency. Returns the authenticated user's UUID, or raises 401.
 
@@ -41,22 +76,8 @@ def get_current_user(authorization: str | None = Header(default=None)) -> str:
 
     token = authorization.split(" ", 1)[1].strip()
     try:
-        decode_kwargs = {
-            "algorithms": ["HS256"],
-            "audience": JWT_AUDIENCE,
-            # Reject tokens that omit expiry or subject instead of treating them as
-            # non-expiring / anonymous.
-            "options": {"require": ["exp", "sub"]},
-        }
-        if JWT_ISSUER:
-            decode_kwargs["issuer"] = JWT_ISSUER
-        payload = jwt.decode(token, SUPABASE_JWT_SECRET, **decode_kwargs)
+        return _decode_user_id(token)
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Session expired — please log in again.")
     except jwt.PyJWTError as e:
         raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
-
-    user_id = payload.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Token is missing a subject (sub) claim.")
-    return user_id

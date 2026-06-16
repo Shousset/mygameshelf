@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { supabase } from "@/lib/supabase/client";
+import { supabase, isSupabaseConfigured } from "@/lib/supabase/client";
 
 export default function SignupPage() {
   const [email, setEmail] = useState("");
@@ -15,18 +15,27 @@ export default function SignupPage() {
     e.preventDefault();
     setError("");
     setInfo("");
-    setLoading(true);
-    const { data, error } = await supabase.auth.signUp({ email, password });
-    setLoading(false);
-    if (error) {
-      setError(error.message);
+    if (!isSupabaseConfigured) {
+      setError("Auth is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in web/.env.local, then restart the dev server.");
       return;
     }
-    // If email confirmation is on, there is no session yet — tell the user to check their inbox.
-    if (data.session) {
-      window.location.href = "/";
-    } else {
-      setInfo("Account created. Check your email to confirm, then sign in.");
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.auth.signUp({ email, password });
+      if (error) {
+        setError(error.message);
+        return;
+      }
+      // If email confirmation is on, there is no session yet — tell the user to check their inbox.
+      if (data.session) {
+        window.location.href = "/";
+      } else {
+        setInfo("Account created. Check your email to confirm, then sign in.");
+      }
+    } catch {
+      setError("Could not reach the auth server. Check your Supabase URL and your connection.");
+    } finally {
+      setLoading(false);
     }
   };
 

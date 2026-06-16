@@ -46,10 +46,14 @@ echo "[run] FastAPI  -> http://localhost:8000"
 "$venv_py" -m uvicorn api.main:app --port 8000 $reload &
 pids+=($!)
 
+echo "[run] Sync worker (Steam job queue)"
+"$venv_py" worker.py &
+pids+=($!)
+
 echo "[run] Next.js  -> http://localhost:3000"
 (cd web && npm run dev) &
 pids+=($!)
 
 echo
-echo "Both running. Open http://localhost:3000  —  press Ctrl+C to stop both."
+echo "All running. Open http://localhost:3000  —  press Ctrl+C to stop everything."
 wait

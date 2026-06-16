@@ -85,10 +85,18 @@ export class OfflineError extends Error {
 
 async function apiFetch(path: string, options?: RequestInit) {
   // Attach the Supabase access token so the backend can identify the user.
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  const token = session?.access_token;
+  // getSession may hit the network to refresh the token; if Supabase is
+  // unreachable/misconfigured it throws a raw TypeError — convert that to an
+  // OfflineError so callers show the friendly banner instead of crashing.
+  let token: string | undefined;
+  try {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    token = session?.access_token;
+  } catch {
+    throw new OfflineError("Could not reach the auth server (check Supabase config).");
+  }
 
   if (!API_BASE) {
     // No backend URL configured (see resolveApiBase) — treat as offline.
@@ -193,6 +201,13 @@ export const psnImport = (titles: string[]) =>
 // Health + Sync
 export interface SyncStatus {
   in_progress: boolean;
+  active_job: {
+    id: number;
+    status: "queued" | "running";
+    trigger: string;
+    enqueued_at: string | null;
+    started_at: string | null;
+  } | null;
   last_run: {
     started_at: string | null;
     finished_at: string | null;
@@ -202,14 +217,39 @@ export interface SyncStatus {
   } | null;
   next_run_at: string | null;
   steam_configured: boolean;
+  steam_linked: boolean;
+  steam_calls_today: number | null;
 }
 
 export const getHealth = (): Promise<{ ok: boolean; db: boolean; steam_configured: boolean }> =>
   apiFetch("/api/health");
 
-export const syncAll = () => apiFetch("/api/sync/all", { method: "POST" });
+// Plan + library usage
+export interface PlanInfo {
+  plan: string;
+  max_games: number | null;      // null = unlimited
+  games_used: number;
+  games_remaining: number | null; // null = unlimited
+}
+
+export const getPlan = (): Promise<PlanInfo> => apiFetch("/api/plan");
+
+// Queues a background sync and returns immediately (HTTP 202). Poll
+// getSyncStatus() for progress and the final result.
+export const syncAll = (): Promise<{ ok: boolean; queued: boolean; job_id: number }> =>
+  apiFetch("/api/sync/all", { method: "POST" });
 
 export const getSyncStatus = (): Promise<SyncStatus> => apiFetch("/api/sync/status");
+
+// "Sign in through Steam" (OpenID): get the redirect URL, then send the browser
+// there. On return, the /settings page POSTs the openid.* params back to verify.
+export const steamOpenIdLogin = (): Promise<{ redirect_url: string }> =>
+  apiFetch("/api/steam/openid/login");
+
+export const steamOpenIdVerify = (
+  params: Record<string, string>,
+): Promise<{ ok: boolean; steam_id: string }> =>
+  apiFetch("/api/steam/openid/verify", { method: "POST", body: JSON.stringify(params) });
 
 // Steam recently played (last 2 weeks)
 export interface RecentlyPlayedGame {

@@ -52,8 +52,11 @@ cp .env.example .env
 
 Edit `.env`:
 - `DB_*` — your local Postgres credentials.
-- `STEAM_API_KEY` — get one at <https://steamcommunity.com/dev/apikey> (optional, but required for any Steam sync feature).
-- `STEAM_ID` — your 17-digit SteamID64 from <https://store.steampowered.com/account> (your profile must be **Public** for sync to work).
+- `STEAM_API_KEY` — get one at <https://steamcommunity.com/dev/apikey> (one server-side key for the whole app; required for any Steam sync feature).
+
+You do **not** put a SteamID in `.env` — it's per-user. Each user links their own
+Steam account from **Settings → "Sign in through Steam"** (OpenID), which captures
+their SteamID64 automatically. (Their profile must be **Public** for sync to work.)
 
 `.env` is gitignored — never commit it.
 
@@ -145,16 +148,38 @@ Inserts a few games, sessions, and wishlist items so you can poke around the UI 
 
 ## How auto-sync works
 
-On every 6-hour tick (and the "Sync now" button), the backend:
+Sync runs in a **separate worker process** (`worker.py`), not inside the web
+server. The flow:
 
-1. Hits Steam's `GetOwnedGames` once for all your games — builds an `appid → playtime + rtime_last_played` index.
-2. For each game with a Steam AppID:
-   - Computes a playtime delta vs the DB and logs a session row if positive.
-   - Refreshes achievements: re-fetches schema + your unlock progress + global rarity, then replaces the rows.
-   - Updates genre + release year via the public Store API (only on the first sync per game).
-3. Records the run in `sync_runs` and updates `games.last_synced_at`.
+1. **Enqueue.** On every 6-hour tick the scheduler enqueues one job per user
+   into a Postgres-backed queue (`sync_jobs` table); the "Sync now" button
+   enqueues a single job and returns immediately (HTTP 202).
+2. **Claim.** The worker(s) claim the oldest queued job with
+   `SELECT ... FOR UPDATE SKIP LOCKED`, so you can run several workers in
+   parallel and no two ever grab the same job. A partial unique index keeps at
+   most one active job per user, so duplicate enqueues are harmless.
+3. **Run.** For the claimed user, the worker:
+   - Hits Steam's `GetOwnedGames` once — builds an `appid → playtime + rtime_last_played` index.
+   - For each game with a Steam AppID: logs a session delta, refreshes achievements
+     (schema + unlock progress + global rarity), and updates genre + release year
+     via the Store API (first sync per game only).
+   - Records the run in `sync_runs` and updates `games.last_synced_at`.
 
-Games imported before the `external_id` column existed get backfilled by title match on the first sync — no manual fix needed.
+The frontend polls `/api/sync/status` to show progress and the final result.
+Games imported before the `external_id` column existed get backfilled by title
+match on the first sync — no manual fix needed.
+
+### Running the worker
+
+`start.ps1` / `start.sh` launch the worker automatically alongside the API and
+frontend. To run it on its own:
+
+```bash
+python worker.py
+```
+
+Scale by starting more workers (each picks different jobs). If you skip the
+worker entirely, jobs simply queue up and run once a worker comes online.
 
 ---
 

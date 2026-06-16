@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { supabase } from "@/lib/supabase/client";
+import { supabase, isSupabaseConfigured } from "@/lib/supabase/client";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -13,15 +13,25 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    setLoading(false);
-    if (error) {
-      setError(error.message);
+    if (!isSupabaseConfigured) {
+      setError("Auth is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in web/.env.local, then restart the dev server.");
       return;
     }
-    // Full reload so the middleware sees the fresh session cookie.
-    window.location.href = "/";
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        setError(error.message);
+        return;
+      }
+      // Full reload so the middleware sees the fresh session cookie.
+      window.location.href = "/";
+    } catch {
+      // Thrown (not returned) errors are network-level — e.g. Supabase unreachable.
+      setError("Could not reach the auth server. Check your Supabase URL and your connection.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
